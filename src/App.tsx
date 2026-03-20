@@ -283,7 +283,6 @@ export default function App() {
       }
 
       setStatus(`Saving ${title} to database...`);
-      const youtubeId = extractYoutubeId(videoUrl);
       
       const videoData = {
         youtube_id: youtubeId,
