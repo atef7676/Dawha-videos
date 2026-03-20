@@ -1,0 +1,5 @@
+{
+  "name": "Islamic VideoTopicIndexer",
+  "description": "Automatically transcribe YouTube videos, identify key topics with timestamps using AI, and search across indexed segments.",
+  "requestFramePermissions": []
+}

@@ -1,0 +1,111 @@
+{
+  "entities": {
+    "Video": {
+      "title": "Video",
+      "description": "Metadata and analysis for an indexed YouTube video",
+      "type": "object",
+      "properties": {
+        "youtube_id": { "type": "string", "description": "YouTube Video ID" },
+        "title": { "type": "string", "description": "Video Title" },
+        "url": { "type": "string", "description": "Full YouTube URL" },
+        "executive_summary": { "type": "string", "description": "AI-generated executive summary" },
+        "linkable_timestamps": { 
+          "type": "array", 
+          "items": { 
+            "type": "object",
+            "properties": {
+              "time": { "type": "string" },
+              "description": { "type": "string" }
+            }
+          } 
+        },
+        "themes_and_topics": {
+          "type": "object",
+          "properties": {
+            "overarching_message": { "type": "string" },
+            "categories": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "theological_topics": { "type": "array", "items": { "type": "string" } },
+        "key_points": { "type": "array", "items": { "type": "string" }, "description": "List of key points" },
+        "keywords": { "type": "array", "items": { "type": "string" }, "description": "SEO tags" },
+        "minute_by_minute": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "timestamp": { "type": "string" },
+              "content": { "type": "string" }
+            }
+          }
+        },
+        "transcript": { "type": "string" },
+        "scripture_references": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "reference_type": { "type": "string" },
+              "reference": { "type": "string" }
+            }
+          }
+        },
+        "entities": { "type": "array", "items": { "type": "string" } },
+        "arguments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string" },
+              "claim": { "type": "string" },
+              "speaker": { "type": "string" },
+              "timestamp": { "type": "string" }
+            }
+          }
+        },
+        "debate_claims": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "claim": { "type": "string" },
+              "speaker": { "type": "string" },
+              "timestamp": { "type": "string" }
+            }
+          }
+        },
+        "speaker_name": { "type": "string" },
+        "channel_name": { "type": "string" },
+        "channel_url": { "type": "string" },
+        "video_timestamp": { "type": "string" },
+        "token_count": { "type": "number" },
+        "userId": { "type": "string", "description": "Owner's Firebase Auth UID" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["youtube_id", "title", "url", "userId", "createdAt"]
+    },
+    "Segment": {
+      "title": "Segment",
+      "description": "A specific topic segment within a video",
+      "type": "object",
+      "properties": {
+        "videoId": { "type": "string", "description": "Reference to the Video document ID" },
+        "topic": { "type": "string" },
+        "start_time": { "type": "number" },
+        "end_time": { "type": "number" },
+        "summary": { "type": "string" }
+      },
+      "required": ["videoId", "topic", "start_time", "end_time", "summary"]
+    }
+  },
+  "firestore": {
+    "/videos/{videoId}": {
+      "schema": "Video",
+      "description": "Collection of indexed videos"
+    },
+    "/videos/{videoId}/segments/{segmentId}": {
+      "schema": "Segment",
+      "description": "Sub-collection of segments for a specific video"
+    }
+  }
+}

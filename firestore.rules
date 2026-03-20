@@ -1,0 +1,139 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: videos
+    // Document ID: {videoId}
+    // Fields:
+    //   - youtube_id: string (required)
+    //   - title: string (required)
+    //   - url: string (required)
+    //   - executive_summary: string
+    //   - linkable_timestamps: list (objects)
+    //   - themes_and_topics: map
+    //   - key_points: list (strings)
+    //   - keywords: list (strings)
+    //   - minute_by_minute: list (objects)
+    //   - transcript: string
+    //   - speaker_name: string
+    //   - channel_name: string
+    //   - channel_url: string
+    //   - video_timestamp: string
+    //   - token_count: number
+    //   - userId: string (required, immutable) - Owner's UID
+    //   - createdAt: timestamp (required, immutable)
+    //
+    // Collection: videos/{videoId}/segments
+    // Document ID: {segmentId}
+    // Fields:
+    //   - videoId: string (required, immutable)
+    //   - topic: string (required)
+    //   - start_time: number (required)
+    //   - end_time: number (required)
+    //   - summary: string (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "atefhassan76@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(data, fields) {
+      return data.keys().hasOnly(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidScriptureReference(ref) {
+      return ref is map &&
+             ref.reference_type in ['quran', 'bible'] &&
+             ref.reference is string && ref.reference.size() > 0 &&
+             ref.verse_text is string && ref.verse_text.size() > 0 && ref.verse_text.size() < 5000;
+    }
+
+    function isValidVideo(data) {
+      return hasRequiredFields(['youtube_id', 'title', 'url', 'userId', 'createdAt']) &&
+             data.youtube_id is string && data.youtube_id.size() > 0 && data.youtube_id.size() < 100 &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 1000 &&
+             data.url is string && data.url.size() > 0 && data.url.size() < 1000 &&
+             data.userId is string && data.userId == request.auth.uid &&
+             data.createdAt is timestamp &&
+             (data.executive_summary == null || (data.executive_summary is string && data.executive_summary.size() < 10000)) &&
+             (data.linkable_timestamps == null || data.linkable_timestamps is list) &&
+             (data.themes_and_topics == null || data.themes_and_topics is map) &&
+             (data.theological_topics == null || data.theological_topics is list) &&
+             (data.key_points == null || data.key_points is list) &&
+             (data.keywords == null || data.keywords is list) &&
+             (data.minute_by_minute == null || data.minute_by_minute is list) &&
+             (data.transcript == null || data.transcript is string) &&
+             (data.scripture_references == null || data.scripture_references is list) &&
+             (data.entities == null || data.entities is list) &&
+             (data.arguments == null || data.arguments is list) &&
+             (data.debate_claims == null || data.debate_claims is list) &&
+             (data.speaker_name == null || data.speaker_name is string) &&
+             (data.channel_name == null || data.channel_name is string) &&
+             (data.channel_url == null || data.channel_url is string) &&
+             (data.video_timestamp == null || data.video_timestamp is string) &&
+             (data.token_count == null || data.token_count is number);
+    }
+
+    function isValidSegment(data, videoId) {
+      return hasRequiredFields(['videoId', 'topic', 'start_time', 'end_time', 'summary']) &&
+             data.videoId == videoId &&
+             data.topic is string && data.topic.size() > 0 && data.topic.size() < 200 &&
+             data.start_time is number && data.end_time is number &&
+             data.summary is string && data.summary.size() > 0 && data.summary.size() < 1000;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /videos/{videoId} {
+      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidVideo(request.resource.data);
+      allow update: if isOwner(resource.data.userId) && isValidVideo(request.resource.data) &&
+                      request.resource.data.userId == resource.data.userId &&
+                      request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+
+      match /segments/{segmentId} {
+        allow read: if isOwner(get(/databases/$(database)/documents/videos/$(videoId)).data.userId) || isAdmin();
+        allow create: if isAuthenticated() && isValidSegment(request.resource.data, videoId) &&
+                        isOwner(get(/databases/$(database)/documents/videos/$(videoId)).data.userId);
+        allow update: if isOwner(get(/databases/$(database)/documents/videos/$(videoId)).data.userId) &&
+                        isValidSegment(request.resource.data, videoId) &&
+                        request.resource.data.videoId == resource.data.videoId;
+        allow delete: if isOwner(get(/databases/$(database)/documents/videos/$(videoId)).data.userId) || isAdmin();
+      }
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow write: if isAdmin();
+    }
+  }
+}
