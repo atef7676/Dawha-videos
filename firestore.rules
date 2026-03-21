@@ -87,11 +87,13 @@ service cloud.firestore {
     }
 
     function isValidVideoReference(data) {
+      let allowedFields = ['video_id', 'reference_type', 'reference_key', 'matched_text', 'confidence_score', 'userId', 'createdAt', 'topic_tags'];
       return hasRequiredFields(['video_id', 'reference_type', 'reference_key', 'matched_text', 'confidence_score', 'userId', 'createdAt']) &&
+             hasOnlyAllowedFields(data, allowedFields) &&
              data.video_id is string &&
              data.reference_type in ['quran', 'hadith', 'bible'] &&
-             data.reference_key is string && data.reference_key.size() > 0 &&
-             data.matched_text is string && data.matched_text.size() > 0 &&
+             data.reference_key is string && data.reference_key.size() > 0 && data.reference_key.size() < 200 &&
+             data.matched_text is string && data.matched_text.size() > 0 && data.matched_text.size() < 5000 &&
              data.confidence_score is number && data.confidence_score >= 0 && data.confidence_score <= 1 &&
              data.userId == request.auth.uid &&
              data.createdAt is timestamp &&
@@ -99,28 +101,37 @@ service cloud.firestore {
     }
 
     function isValidVideo(data) {
+      let allowedFields = [
+        'youtube_id', 'title', 'url', 'executive_summary', 'linkable_timestamps',
+        'themes_and_topics', 'theological_topics', 'key_points', 'keywords',
+        'minute_by_minute', 'transcript', 'scripture_references', 'entities',
+        'arguments', 'debate_claims', 'speaker_name', 'channel_name', 'channel_url',
+        'video_timestamp', 'token_count', 'userId', 'createdAt', 'all_scripture_references'
+      ];
       return hasRequiredFields(['youtube_id', 'title', 'url', 'userId', 'createdAt']) &&
+             hasOnlyAllowedFields(data, allowedFields) &&
              data.youtube_id is string && data.youtube_id.size() > 0 && data.youtube_id.size() < 100 &&
-             data.title is string && data.title.size() > 0 && data.title.size() < 1000 &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 2000 &&
              data.url is string && data.url.size() > 0 && data.url.size() < 1000 &&
              data.userId is string && data.userId == request.auth.uid &&
              data.createdAt is timestamp &&
-             (data.executive_summary == null || (data.executive_summary is string && data.executive_summary.size() < 10000)) &&
+             (data.executive_summary == null || (data.executive_summary is string && data.executive_summary.size() < 20000)) &&
              (data.linkable_timestamps == null || data.linkable_timestamps is list) &&
              (data.themes_and_topics == null || data.themes_and_topics is map) &&
              (data.theological_topics == null || data.theological_topics is list) &&
              (data.key_points == null || data.key_points is list) &&
              (data.keywords == null || data.keywords is list) &&
              (data.minute_by_minute == null || data.minute_by_minute is list) &&
-             (data.transcript == null || data.transcript is string) &&
+             (data.transcript == null || (data.transcript is string && data.transcript.size() < 1000000)) &&
              (data.scripture_references == null || data.scripture_references is list) &&
              (data.entities == null || data.entities is list) &&
              (data.arguments == null || data.arguments is list) &&
              (data.debate_claims == null || data.debate_claims is list) &&
-             (data.speaker_name == null || data.speaker_name is string) &&
-             (data.channel_name == null || data.channel_name is string) &&
-             (data.channel_url == null || data.channel_url is string) &&
-             (data.video_timestamp == null || data.video_timestamp is string) &&
+             (data.all_scripture_references == null || data.all_scripture_references is list) &&
+             (data.speaker_name == null || (data.speaker_name is string && data.speaker_name.size() < 500)) &&
+             (data.channel_name == null || (data.channel_name is string && data.channel_name.size() < 500)) &&
+             (data.channel_url == null || (data.channel_url is string && data.channel_url.size() < 1000)) &&
+             (data.video_timestamp == null || (data.video_timestamp is string && data.video_timestamp.size() < 100)) &&
              (data.token_count == null || data.token_count is number);
     }
 
@@ -130,6 +141,45 @@ service cloud.firestore {
              data.topic is string && data.topic.size() > 0 && data.topic.size() < 200 &&
              data.start_time is number && data.end_time is number &&
              data.summary is string && data.summary.size() > 0 && data.summary.size() < 1000;
+    }
+
+    function isValidKnowledgeTopic(data) {
+      let allowedFields = ['title', 'description', 'categories', 'related_scriptures', 'cross_faith_comparisons', 'userId', 'createdAt', 'updatedAt'];
+      return hasRequiredFields(['title', 'userId', 'createdAt']) &&
+             hasOnlyAllowedFields(data, allowedFields) &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 500 &&
+             data.userId == request.auth.uid &&
+             data.createdAt is timestamp &&
+             (data.description == null || (data.description is string && data.description.size() < 10000)) &&
+             (data.categories == null || data.categories is list) &&
+             (data.related_scriptures == null || data.related_scriptures is list) &&
+             (data.cross_faith_comparisons == null || (data.cross_faith_comparisons is string && data.cross_faith_comparisons.size() < 10000)) &&
+             (data.updatedAt == null || data.updatedAt is timestamp);
+    }
+
+    function isValidKnowledgeEntry(data) {
+      let allowedFields = ['topicId', 'sourceType', 'sourceId', 'content', 'speaker', 'timestamp', 'metadata', 'userId', 'createdAt'];
+      return hasRequiredFields(['topicId', 'sourceType', 'content', 'userId', 'createdAt']) &&
+             hasOnlyAllowedFields(data, allowedFields) &&
+             data.topicId is string &&
+             data.sourceType in ['video', 'text', 'scripture'] &&
+             data.content is string && data.content.size() > 0 && data.content.size() < 20000 &&
+             data.userId == request.auth.uid &&
+             data.createdAt is timestamp &&
+             (data.sourceId == null || data.sourceId is string) &&
+             (data.speaker == null || data.speaker is string) &&
+             (data.timestamp == null || data.timestamp is number) &&
+             (data.metadata == null || data.metadata is map);
+    }
+
+    function isValidTaxonomy(data) {
+      let allowedFields = ['name', 'type', 'description', 'userId'];
+      return hasRequiredFields(['name', 'type', 'userId']) &&
+             hasOnlyAllowedFields(data, allowedFields) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
+             data.type in ['topic', 'theme', 'argument_type', 'category'] &&
+             data.userId == request.auth.uid &&
+             (data.description == null || (data.description is string && data.description.size() < 1000));
     }
 
     // ===============================================================
@@ -161,6 +211,32 @@ service cloud.firestore {
       allow update: if isOwner(resource.data.userId) && isValidVideoReference(request.resource.data) &&
                       request.resource.data.userId == resource.data.userId &&
                       request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    match /knowledge_topics/{topicId} {
+      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidKnowledgeTopic(request.resource.data);
+      allow update: if isOwner(resource.data.userId) && isValidKnowledgeTopic(request.resource.data) &&
+                      request.resource.data.userId == resource.data.userId &&
+                      request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    match /knowledge_entries/{entryId} {
+      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidKnowledgeEntry(request.resource.data);
+      allow update: if isOwner(resource.data.userId) && isValidKnowledgeEntry(request.resource.data) &&
+                      request.resource.data.userId == resource.data.userId &&
+                      request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    match /taxonomy/{taxonomyId} {
+      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidTaxonomy(request.resource.data);
+      allow update: if isOwner(resource.data.userId) && isValidTaxonomy(request.resource.data) &&
+                      request.resource.data.userId == resource.data.userId;
       allow delete: if isOwner(resource.data.userId) || isAdmin();
     }
 

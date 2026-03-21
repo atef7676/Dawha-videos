@@ -79,6 +79,19 @@
         "channel_url": { "type": "string" },
         "video_timestamp": { "type": "string" },
         "token_count": { "type": "number" },
+        "all_scripture_references": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "reference_type": { "type": "string" },
+              "reference_key": { "type": "string" },
+              "evidence_text": { "type": "string" },
+              "confidence_score": { "type": "number" },
+              "topic_tags": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
         "userId": { "type": "string", "description": "Owner's Firebase Auth UID" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
@@ -114,6 +127,51 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["video_id", "reference_type", "reference_key", "matched_text", "confidence_score", "userId", "createdAt"]
+    },
+    "KnowledgeTopic": {
+      "title": "KnowledgeTopic",
+      "description": "A unified topic aggregating insights from multiple sources",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "categories": { "type": "array", "items": { "type": "string" } },
+        "related_scriptures": { "type": "array", "items": { "type": "string" } },
+        "cross_faith_comparisons": { "type": "string" },
+        "userId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "userId", "createdAt"]
+    },
+    "KnowledgeEntry": {
+      "title": "KnowledgeEntry",
+      "description": "An individual piece of information contributing to a KnowledgeTopic",
+      "type": "object",
+      "properties": {
+        "topicId": { "type": "string" },
+        "sourceType": { "type": "string", "enum": ["video", "text", "scripture"] },
+        "sourceId": { "type": "string" },
+        "content": { "type": "string" },
+        "speaker": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "metadata": { "type": "object" },
+        "userId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["topicId", "sourceType", "content", "userId", "createdAt"]
+    },
+    "Taxonomy": {
+      "title": "Taxonomy",
+      "description": "Consistent categorization system",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["topic", "theme", "argument_type", "category"] },
+        "description": { "type": "string" },
+        "userId": { "type": "string" }
+      },
+      "required": ["name", "type", "userId"]
     }
   },
   "firestore": {
@@ -128,6 +186,18 @@
     "/video_references/{referenceId}": {
       "schema": "VideoReference",
       "description": "Root collection of all scripture and knowledge references across all videos"
+    },
+    "/knowledge_topics/{topicId}": {
+      "schema": "KnowledgeTopic",
+      "description": "Unified knowledge base topics"
+    },
+    "/knowledge_entries/{entryId}": {
+      "schema": "KnowledgeEntry",
+      "description": "Individual entries linked to topics"
+    },
+    "/taxonomy/{taxonomyId}": {
+      "schema": "Taxonomy",
+      "description": "Categorization system"
     }
   }
 }

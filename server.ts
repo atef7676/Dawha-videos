@@ -57,46 +57,72 @@ async function startServer() {
         if (metaRes.ok) {
           const meta = await metaRes.json();
           title = meta.title;
+        } else {
+          // Fallback to ytsr for title
+          const searchResults = await ytsr(url, { limit: 1 });
+          const video = searchResults.items.find(item => item.type === 'video');
+          if (video && 'title' in video) {
+            title = (video as any).title;
+          }
         }
       } catch (e) {
-        console.warn("Metadata fetch failed, using default title");
+        console.warn("Metadata fetch failed, trying ytsr...");
+        try {
+          const searchResults = await ytsr(url, { limit: 1 });
+          const video = searchResults.items.find(item => item.type === 'video');
+          if (video && 'title' in video) {
+            title = (video as any).title;
+          }
+        } catch (innerE) {
+          console.warn("ytsr title fetch also failed");
+        }
       }
 
       res.json({ transcript, title });
     } catch (error: any) {
       console.error("Transcript error:", error);
       
-      // If transcript is disabled, we still want to try and get the title
+      // If transcript is disabled or any other error occurs, we still want to try and get the title
       let title = "YouTube Video";
       try {
         const metaRes = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`);
         if (metaRes.ok) {
           const meta = await metaRes.json();
           title = meta.title;
+        } else {
+          const searchResults = await ytsr(url, { limit: 1 });
+          const video = searchResults.items.find(item => item.type === 'video');
+          if (video && 'title' in video) {
+            title = (video as any).title;
+          }
         }
-      } catch (e) {}
+      } catch (e) {
+        try {
+          const searchResults = await ytsr(url, { limit: 1 });
+          const video = searchResults.items.find(item => item.type === 'video');
+          if (video && 'title' in video) {
+            title = (video as any).title;
+          }
+        } catch (innerE) {}
+      }
 
-      if (error.message && error.message.includes("Transcript is disabled")) {
-        // Return a special flag so the frontend knows to use the AI fallback
-        return res.json({ 
-          transcript: null, 
-          title,
-          fallback: true,
-          message: "Transcripts are disabled for this video. Switching to AI-generated alternative transcription..." 
-        });
-      }
+      // Return a special flag so the frontend knows to use the AI fallback
+      // This handles "Transcript is disabled" and any other fetching failure
+      let message = "Automatic transcript fetch failed. Switching to AI-generated alternative transcription...";
       
-      let errorMessage = "Failed to fetch transcript. Make sure the video has captions enabled.";
-      if (error.message && error.message.includes("Could not find videoId")) {
-        errorMessage = "Invalid YouTube URL. Please check the link and try again.";
+      if (error.message && error.message.includes("too many requests")) {
+        message = "YouTube is rate-limiting transcript requests. Switching to AI-generated alternative transcription (this is more reliable for large batches)...";
+      } else if (error.message && error.message.includes("disabled")) {
+        message = "Transcripts are disabled for this video. Switching to AI-generated alternative transcription...";
       }
-      
-      res.status(500).json({ error: errorMessage });
+
+      return res.json({ 
+        transcript: null, 
+        title,
+        fallback: true,
+        message
+      });
     }
-  });
-
-  app.get("/api/search", (req, res) => {
-    res.status(400).json({ error: "Search is now handled client-side via Firestore." });
   });
 
   // Vite middleware for development
