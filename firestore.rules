@@ -35,6 +35,18 @@ service cloud.firestore {
     //   - end_time: number (required)
     //   - summary: string (required)
     //
+    // Collection: video_references
+    // Document ID: {referenceId}
+    // Fields:
+    //   - video_id: string (required)
+    //   - reference_type: string (required) - quran, hadith, bible
+    //   - reference_key: string (required) - e.g. Q_2_256
+    //   - matched_text: string (required)
+    //   - confidence_score: number (required)
+    //   - topic_tags: list (strings)
+    //   - userId: string (required, immutable)
+    //   - createdAt: timestamp (required, immutable)
+    //
     // ===============================================================
 
     // ===============================================================
@@ -69,9 +81,21 @@ service cloud.firestore {
 
     function isValidScriptureReference(ref) {
       return ref is map &&
-             ref.reference_type in ['quran', 'bible'] &&
+             ref.reference_type in ['quran', 'hadith', 'bible'] &&
              ref.reference is string && ref.reference.size() > 0 &&
-             ref.verse_text is string && ref.verse_text.size() > 0 && ref.verse_text.size() < 5000;
+             (ref.verse_text == null || (ref.verse_text is string && ref.verse_text.size() < 5000));
+    }
+
+    function isValidVideoReference(data) {
+      return hasRequiredFields(['video_id', 'reference_type', 'reference_key', 'matched_text', 'confidence_score', 'userId', 'createdAt']) &&
+             data.video_id is string &&
+             data.reference_type in ['quran', 'hadith', 'bible'] &&
+             data.reference_key is string && data.reference_key.size() > 0 &&
+             data.matched_text is string && data.matched_text.size() > 0 &&
+             data.confidence_score is number && data.confidence_score >= 0 && data.confidence_score <= 1 &&
+             data.userId == request.auth.uid &&
+             data.createdAt is timestamp &&
+             (data.topic_tags == null || data.topic_tags is list);
     }
 
     function isValidVideo(data) {
@@ -129,6 +153,15 @@ service cloud.firestore {
                         request.resource.data.videoId == resource.data.videoId;
         allow delete: if isOwner(get(/databases/$(database)/documents/videos/$(videoId)).data.userId) || isAdmin();
       }
+    }
+
+    match /video_references/{referenceId} {
+      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidVideoReference(request.resource.data);
+      allow update: if isOwner(resource.data.userId) && isValidVideoReference(request.resource.data) &&
+                      request.resource.data.userId == resource.data.userId &&
+                      request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isOwner(resource.data.userId) || isAdmin();
     }
 
     match /users/{userId} {

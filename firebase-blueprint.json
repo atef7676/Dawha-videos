@@ -96,6 +96,24 @@
         "summary": { "type": "string" }
       },
       "required": ["videoId", "topic", "start_time", "end_time", "summary"]
+    },
+    "VideoReference": {
+      "title": "VideoReference",
+      "description": "A linked scripture or knowledge reference within a video",
+      "type": "object",
+      "properties": {
+        "video_id": { "type": "string" },
+        "reference_type": { "type": "string", "enum": ["quran", "hadith", "bible"] },
+        "reference_key": { "type": "string", "description": "Normalized key (e.g. Q_2_256)" },
+        "matched_text": { "type": "string" },
+        "confidence_score": { "type": "number" },
+        "start_time": { "type": "number" },
+        "end_time": { "type": "number" },
+        "topic_tags": { "type": "array", "items": { "type": "string" } },
+        "userId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["video_id", "reference_type", "reference_key", "matched_text", "confidence_score", "userId", "createdAt"]
     }
   },
   "firestore": {
@@ -106,6 +124,10 @@
     "/videos/{videoId}/segments/{segmentId}": {
       "schema": "Segment",
       "description": "Sub-collection of segments for a specific video"
+    },
+    "/video_references/{referenceId}": {
+      "schema": "VideoReference",
+      "description": "Root collection of all scripture and knowledge references across all videos"
     }
   }
 }

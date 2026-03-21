@@ -6,6 +6,8 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Plus, Video, Clock, ChevronRight, Loader2, Play, ExternalLink, Database, Download, X, Trash2, LogIn, LogOut, User, BookOpen, ArrowLeft, FileText } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import KnowledgePage from './components/KnowledgePage';
+import { quranService } from './services/quranService';
 import HistoryPage from './HistoryPage';
 import { analyzeTranscript, generateAltTranscript, translateVideoAnalysis, Segment, VideoAnalysis } from './services/geminiService';
 import { db, auth, handleFirestoreError, OperationType } from './firebase';
@@ -115,6 +117,7 @@ const translations = {
     login: "Sign in with Google",
     logout: "Sign Out",
     history: "History",
+    knowledgeBase: "Knowledge Base",
     allReferences: "All Scripture References",
     keywords: "Keywords",
     categories: "Categories",
@@ -185,6 +188,7 @@ const translations = {
     login: "تسجيل الدخول بجوجل",
     logout: "تسجيل الخروج",
     history: "السجل",
+    knowledgeBase: "قاعدة المعرفة",
     allReferences: "جميع المراجع الدينية",
     keywords: "الكلمات المفتاحية",
     categories: "التصنيفات",
@@ -297,8 +301,9 @@ export default function App() {
   const [videoSegments, setVideoSegments] = useState<Segment[]>([]);
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'single' | 'channel' | 'history'>('single');
-  const [currentPage, setCurrentPage] = useState<'main' | 'history'>('main');
+  const [activeTab, setActiveTab] = useState<'single' | 'channel' | 'history' | 'knowledge'>('single');
+  const [knowledgeBaseSelection, setKnowledgeBaseSelection] = useState<any>(null);
+  const [currentPage, setCurrentPage] = useState<'main' | 'history' | 'knowledge'>('main');
   const [channelVideos, setChannelVideos] = useState<any[]>([]);
   const [channelPage, setChannelPage] = useState(1);
   const [selectedChannelVideos, setSelectedChannelVideos] = useState<string[]>([]);
@@ -532,6 +537,26 @@ export default function App() {
       try {
         const videoRef = await addDoc(collection(db, 'videos'), videoData);
         
+        // Save references to the global video_references collection
+        const referencesBatch = (analysis.all_scripture_references || []).map(ref => {
+          // Convert MM:SS to seconds for the reference if possible
+          // In this context, we might not have exact start/end for each reference in all_scripture_references
+          // but we can try to find it from linkable_timestamps if it matches
+          
+          return addDoc(collection(db, 'video_references'), {
+            video_id: videoRef.id,
+            reference_type: ref.reference_type,
+            reference_key: ref.reference_key,
+            matched_text: ref.evidence_text,
+            confidence_score: ref.confidence_score,
+            topic_tags: ref.topic_tags || [],
+            userId: user.uid,
+            createdAt: serverTimestamp(),
+            // Optional: add start/end if we had them
+          });
+        });
+        await Promise.all(referencesBatch);
+
         // Save linkable timestamps as segments for search compatibility
         const segmentsBatch = analysis.linkable_timestamps.map(ts => {
           const parts = ts.time.split(':');
@@ -955,6 +980,21 @@ export default function App() {
               </div>
             </div>
 
+            <div className="flex items-center gap-6">
+              <button 
+                onClick={() => setCurrentPage('main')}
+                className={`text-xs font-bold uppercase tracking-widest transition-all ${currentPage === 'main' ? 'text-[#141414]' : 'text-[#141414]/40 hover:text-[#141414]'}`}
+              >
+                Indexer
+              </button>
+              <button 
+                onClick={() => setCurrentPage('knowledge')}
+                className={`text-xs font-bold uppercase tracking-widest transition-all ${currentPage === 'knowledge' ? 'text-[#141414]' : 'text-[#141414]/40 hover:text-[#141414]'}`}
+              >
+                Knowledge Base
+              </button>
+            </div>
+
             <div className="h-6 w-px bg-[#141414]/10 hidden sm:block"></div>
 
             {user ? (
@@ -991,7 +1031,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className={`max-w-6xl mx-auto px-6 py-12 ${!selectedVideo && user ? 'grid grid-cols-1 lg:grid-cols-12 gap-12' : 'block'}`}>
+      <main className={`max-w-6xl mx-auto px-6 py-12 ${!selectedVideo && user && currentPage !== 'knowledge' ? 'grid grid-cols-1 lg:grid-cols-12 gap-12' : 'block'}`}>
         {!user ? (
           <div className="lg:col-span-12 flex flex-col items-center justify-center py-20 text-center">
             <div className="bg-[#141414]/5 p-6 rounded-3xl mb-6">
@@ -1009,6 +1049,11 @@ export default function App() {
               {t.login}
             </button>
           </div>
+        ) : currentPage === 'knowledge' ? (
+          <KnowledgePage 
+            onBack={() => setCurrentPage('main')} 
+            initialSelection={knowledgeBaseSelection} 
+          />
         ) : selectedVideo ? (
           <div className="w-full">
             <AnimatePresence mode="wait">
@@ -1129,7 +1174,14 @@ export default function App() {
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {selectedVideo.all_scripture_references.map((ref, i) => (
-                        <ScriptureBadge key={i} reference={ref} />
+                        <ScriptureBadge 
+                          key={i} 
+                          reference={ref} 
+                          onNavigateToKnowledge={(r) => {
+                            setKnowledgeBaseSelection(r);
+                            setCurrentPage('knowledge');
+                          }}
+                        />
                       ))}
                     </div>
                   </div>
@@ -1242,7 +1294,14 @@ export default function App() {
                               {ts.scripture_references && ts.scripture_references.length > 0 && (
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                   {ts.scripture_references.map((ref: any, i: number) => (
-                                    <ScriptureBadge key={i} reference={ref} />
+                                    <ScriptureBadge 
+                                      key={i} 
+                                      reference={ref} 
+                                      onNavigateToKnowledge={(r) => {
+                                        setKnowledgeBaseSelection(r);
+                                        setCurrentPage('knowledge');
+                                      }}
+                                    />
                                   ))}
                                 </div>
                               )}
@@ -1279,6 +1338,12 @@ export default function App() {
                     className={`text-[10px] font-bold uppercase tracking-widest pb-3 border-b-2 transition-all ${activeTab === 'history' ? 'border-[#141414] text-[#141414]' : 'border-transparent text-[#141414]/40'}`}
                   >
                     {t.history}
+                  </button>
+                  <button 
+                    onClick={() => setCurrentPage('knowledge')}
+                    className="text-[10px] font-bold uppercase tracking-widest pb-3 border-b-2 border-transparent text-[#141414]/40 hover:text-[#141414] transition-all"
+                  >
+                    {t.knowledgeBase}
                   </button>
                 </div>
 
@@ -1515,7 +1580,31 @@ export default function App() {
             {/* Right Column: Results */}
             <div className="lg:col-span-8">
               <AnimatePresence mode="wait">
-                {searchResults.length > 0 ? (
+                {activeTab === 'knowledge' ? (
+                  <motion.div
+                    key="knowledge-base"
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -20 }}
+                    className="h-[70vh] flex flex-col items-center justify-center text-center space-y-6 bg-white rounded-[2.5rem] border border-[#141414]/5 shadow-sm"
+                  >
+                    <div className="w-20 h-20 bg-[#141414]/[0.02] rounded-full flex items-center justify-center">
+                      <BookOpen className="w-8 h-8 text-[#141414]/10" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-serif italic text-[#141414]">{t.knowledgeBase}</h3>
+                      <p className="text-xs text-[#141414]/40 max-w-xs mx-auto mt-2">
+                        Explore the Quran and Tafseer in our dedicated full-screen explorer.
+                      </p>
+                    </div>
+                    <button 
+                      onClick={() => setCurrentPage('knowledge')}
+                      className="px-6 py-3 bg-[#141414] text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-[#141414]/90 transition-all shadow-lg shadow-[#141414]/10"
+                    >
+                      Open Explorer
+                    </button>
+                  </motion.div>
+                ) : searchResults.length > 0 ? (
                   <motion.div
                     key="search-results"
                     initial={{ opacity: 0, y: 10 }}
@@ -1536,6 +1625,10 @@ export default function App() {
                           result={result} 
                           formatTime={formatTime} 
                           onViewDetails={handleViewDetails}
+                          onNavigateToKnowledge={(r) => {
+                            setKnowledgeBaseSelection(r);
+                            setCurrentPage('knowledge');
+                          }}
                         />
                       ))}
                     </div>
@@ -1627,37 +1720,80 @@ function DetailSection({ title, children, className = "" }: { title: string, chi
   );
 }
 
-function ScriptureBadge({ reference }: { reference: any }) {
+function ScriptureBadge({ reference, onNavigateToKnowledge }: { reference: any, onNavigateToKnowledge?: (ref: any) => void }) {
+  const [fetchedText, setFetchedText] = useState<string | null>(null);
   const refType = reference.reference_type?.toLowerCase() || '';
   const isQuran = refType === 'quran';
   const isBible = refType === 'bible';
+  const isHadith = refType === 'hadith';
   
+  useEffect(() => {
+    if (isQuran && reference.surah && reference.ayah && !reference.verse_text) {
+      quranService.getTranslation(reference.surah, reference.ayah).then(setFetchedText);
+    }
+  }, [isQuran, reference.surah, reference.ayah, reference.verse_text]);
+
   const badgeColor = isQuran 
     ? 'bg-emerald-50 text-emerald-700 border-emerald-100' 
     : isBible 
       ? 'bg-amber-50 text-amber-700 border-amber-100'
-      : 'bg-gray-50 text-gray-700 border-gray-100';
+      : isHadith
+        ? 'bg-blue-50 text-blue-700 border-blue-100'
+        : 'bg-gray-50 text-gray-700 border-gray-100';
   
   return (
     <div className={`inline-flex flex-col p-2 rounded-lg border ${badgeColor} text-xs space-y-1 w-full`}>
-      <div className="flex items-center gap-1.5 font-bold">
-        <BookOpen className="w-3 h-3" />
-        <span>{reference.reference}</span>
+      <div className="flex items-center justify-between font-bold">
+        <div className="flex items-center gap-1.5">
+          <BookOpen className="w-3 h-3" />
+          <span>{reference.reference}</span>
+        </div>
+        <div className="flex items-center gap-1">
+          {reference.reference_key && (
+            <span className="text-[9px] font-mono opacity-50 bg-black/5 px-1 rounded">{reference.reference_key}</span>
+          )}
+          {isQuran && onNavigateToKnowledge && (
+            <button 
+              onClick={() => onNavigateToKnowledge(reference)}
+              className="p-1 hover:bg-black/5 rounded transition-colors"
+              title="View in Knowledge Base"
+            >
+              <ExternalLink className="w-2.5 h-2.5" />
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="flex items-center gap-1">
         {reference.match_type && (
           <span className="text-[10px] opacity-60 uppercase tracking-tighter">({reference.match_type.replace('_', ' ')})</span>
         )}
+        {reference.confidence_score && (
+          <span className="text-[9px] opacity-40 font-mono">Conf: {(reference.confidence_score * 100).toFixed(0)}%</span>
+        )}
       </div>
+      {(reference.verse_text || fetchedText) && (
+        <p className="text-[10px] opacity-80 leading-tight border-l-2 border-current/20 pl-2 my-1">
+          {reference.verse_text || fetchedText}
+        </p>
+      )}
       {reference.evidence_text && (
         <p className="italic opacity-80 line-clamp-2">"{reference.evidence_text}"</p>
       )}
       {reference.explanation && (
         <p className="text-[10px] opacity-60 leading-tight">{reference.explanation}</p>
       )}
+      {reference.topic_tags && reference.topic_tags.length > 0 && (
+        <div className="flex flex-wrap gap-1 pt-1">
+          {reference.topic_tags.map((tag: string, i: number) => (
+            <span key={i} className="text-[8px] uppercase tracking-widest bg-black/5 px-1 rounded-sm">{tag}</span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-function SearchResultCard({ result, formatTime, onViewDetails }: { result: SearchResult, formatTime: (s: number) => string, onViewDetails: (videoUrl: string) => void }) {
+function SearchResultCard({ result, formatTime, onViewDetails, onNavigateToKnowledge }: { result: SearchResult, formatTime: (s: number) => string, onViewDetails: (videoUrl: string) => void, onNavigateToKnowledge: (ref: any) => void }) {
   return (
     <div className="bg-white p-6 rounded-2xl border border-[#141414]/5 shadow-sm hover:shadow-md transition-all group">
       <div className="flex items-start justify-between mb-4">
@@ -1708,7 +1844,11 @@ function SearchResultCard({ result, formatTime, onViewDetails }: { result: Searc
           <p className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/30">Scripture References</p>
           <div className="grid grid-cols-1 gap-2">
             {result.scripture_references.map((ref, i) => (
-              <ScriptureBadge key={i} reference={ref} />
+              <ScriptureBadge 
+                key={i} 
+                reference={ref} 
+                onNavigateToKnowledge={onNavigateToKnowledge}
+              />
             ))}
           </div>
         </div>
@@ -1717,7 +1857,7 @@ function SearchResultCard({ result, formatTime, onViewDetails }: { result: Searc
   );
 }
 
-function SegmentCard({ segment, formatTime, youtubeId }: { segment: Segment, formatTime: (s: number) => string, youtubeId: string }) {
+function SegmentCard({ segment, formatTime, youtubeId, onNavigateToKnowledge }: { segment: Segment, formatTime: (s: number) => string, youtubeId: string, onNavigateToKnowledge: (ref: any) => void }) {
   const videoUrl = `https://youtube.com/watch?v=${youtubeId}`;
   const cleanUrl = getCleanYoutubeUrl(videoUrl);
   
@@ -1753,7 +1893,11 @@ function SegmentCard({ segment, formatTime, youtubeId }: { segment: Segment, for
       {segment.scripture_references && segment.scripture_references.length > 0 && (
         <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-[#141414]/5">
           {segment.scripture_references.map((ref, i) => (
-            <ScriptureBadge key={i} reference={ref} />
+            <ScriptureBadge 
+              key={i} 
+              reference={ref} 
+              onNavigateToKnowledge={onNavigateToKnowledge}
+            />
           ))}
         </div>
       )}

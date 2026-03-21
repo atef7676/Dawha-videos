@@ -27,12 +27,16 @@ export interface ThemesAndTopics {
 }
 
 export interface ScriptureReference {
-  reference_type: "quran" | "bible";
+  reference_type: "quran" | "hadith" | "bible";
   reference: string;
+  reference_key: string; // Normalized key (e.g. Q_2_256, H_Bukhari_1, B_John_3_16)
   match_type: "exact_quote" | "explicit_reference" | "close_paraphrase" | "thematic_reference" | "uncertain";
   confidence_score: number;
   evidence_text: string;
   explanation: string;
+  topic_tags: string[];
+  start_time?: number;
+  end_time?: number;
   verse_text?: string;
   surah?: number;
   ayah?: number;
@@ -75,32 +79,34 @@ export async function analyzeTranscript(transcriptText: string, videoUrl: string
     contents: `Analyze the following video transcript and extract the following features in a structured format. 
 
     ### SYSTEM ROLE
-    You are an expert in Qur’an structure, Bible structure, Dawah, interfaith debates, and comparative theology. Your task is to detect scripture references inside transcript segments with high accuracy.
+    You are an expert in Qur’an structure, Hadith collections (Bukhari, Muslim, etc.), Bible structure, Dawah, interfaith debates, and comparative theology. Your task is to detect scripture and knowledge references inside transcript segments with high accuracy.
 
     ### OBJECTIVE
     For each transcript segment, detect whether the speaker:
-    1. Quoted scripture directly (exact_quote)
-    2. Mentioned a scripture reference explicitly (explicit_reference)
-    3. Paraphrased a known verse (close_paraphrase)
-    4. Expressed a theological idea strongly tied to a known verse (thematic_reference)
+    1. Quoted scripture or a Hadith directly (exact_quote)
+    2. Mentioned a reference explicitly (explicit_reference)
+    3. Paraphrased a known verse or Hadith (close_paraphrase)
+    4. Expressed a theological idea strongly tied to a known reference (thematic_reference)
 
-    ### SCRIPTURE DETECTION RULES
-    - **Normalization:** Normalize all references (e.g., "Quran 112:1", "John 1:1").
-    - **Quran Rules:** Use Surah:Ayah format. Detect even if only the name of the Surah is mentioned with a clear verse paraphrase. Be very sensitive to common Dawah verses (e.g., 2:255, 3:64, 4:171, 5:72, 5:73, 112:1-4).
-    - **Bible Rules:** Use Book Chapter:Verse format. Be very sensitive to common interfaith debate verses (e.g., John 1:1, John 14:28, John 10:30, Mark 12:29, Deuteronomy 6:4).
-    - **Match Types:**
-        - exact_quote: Word-for-word citation.
-        - explicit_reference: Mentioning the chapter/verse numbers.
-        - close_paraphrase: Rephrasing the verse while maintaining its specific structure.
-        - thematic_reference: Discussing the specific content of a verse without naming it.
-    - **Confidence Scoring:**
-        - exact_quote: 0.95 - 1.0
-        - explicit_reference: 0.9 - 0.95
-        - close_paraphrase: 0.7 - 0.85
-        - thematic_reference: 0.5 - 0.7
-        - uncertain: < 0.5
-    - **Theological Context Boost:** If the video is about "Tawhid", "Trinity", or "Jesus divinity", increase sensitivity for related verses.
-    - **Accuracy First:** Do not fabricate references. If unsure, mark as "uncertain" or omit if confidence is very low.
+    ### SCRIPTURE & KNOWLEDGE DETECTION RULES
+    - **Semantic Matching:** Do NOT rely on exact text. Match meaning even if wording differs significantly (e.g., "there is no compulsion in religion" -> Quran 2:256).
+    - **Context Window:** Use surrounding text to improve accuracy.
+    - **Normalization:** Normalize all references.
+        - Quran: Q_Surah_Ayah (e.g., Q_2_256).
+        - Hadith: H_Collection_Number (e.g., H_Bukhari_1).
+        - Bible: B_Book_Chapter_Verse (e.g., B_John_3_16).
+    - **Match Types & Confidence Scoring:**
+        - exact_quote (0.95 - 1.0): Word-for-word citation from a recognized translation (e.g., KJV, Sahih International).
+        - explicit_reference (0.9 - 0.95): Speaker explicitly names the book/surah and chapter/verse.
+        - close_paraphrase (0.75 - 0.85): Core meaning and sentence structure are preserved, despite minor wording variations.
+        - thematic_reference (0.6 - 0.75): Discussion of a specific theological concept uniquely tied to a passage (e.g., "The Word was with God" -> John 1:1) without direct citation.
+    - **Topic Alignment:** Inherit relevant topic tags from the matched reference.
+    - **Accuracy First:** Only return matches with confidence > 0.6. If no strong match, return null or omit.
+
+    ### KNOWLEDGE BASE CONTEXT (HIGH PRIORITY)
+    - **Quran:** 2:255 (Ayatul Kursi), 2:256 (No compulsion), 3:64 (Common word), 4:157 (Crucifixion), 4:171 (Trinity/Jesus), 5:72-73 (Divinity of Christ), 112:1-4 (Tawhid), 5:48 (Competing in goodness), 16:125 (Invite to the way of your Lord).
+    - **Hadith:** Bukhari 1 (Intentions), Muslim 1 (Iman/Islam/Ihsan), 40 Hadith Nawawi, Hadith on the treatment of neighbors, Hadith on seeking knowledge.
+    - **Bible:** John 1:1 (The Word), John 14:28 (Father is greater), John 10:30 (I and Father are one), Mark 12:29 (Shema), Deuteronomy 6:4, Isaiah 43:10-11, Matthew 5 (Sermon on the Mount), 1 Corinthians 13 (Love).
 
     ### FEATURES TO EXTRACT
     1. Executive Summary: A high-level overview.
@@ -110,13 +116,13 @@ export async function analyzeTranscript(transcriptText: string, videoUrl: string
     5. Key Points: Essential facts or arguments.
     6. Keywords: Relevant tags.
     7. Minute-by-Minute: Detailed breakdown for EVERY MINUTE.
-    8. Scripture References: A top-level list of the most significant scripture references found.
+    8. Scripture References: A top-level list of the most significant references found.
     9. All Scripture References: A consolidated list of ALL detected references across the entire video.
     10. Entities: People, religions, books, scriptures, locations.
     11. Arguments: Logical arguments.
     12. Debate Claims: Major claims in debates.
-    13. Speaker Name: Identify the main speaker(s) from the transcript or title.
-    14. Channel Name: Identify the YouTube channel if mentioned or inferred.
+    13. Speaker Name: Identify the main speaker(s).
+    14. Channel Name: Identify the YouTube channel.
     
     Transcript:
     ${transcriptText}
@@ -144,10 +150,12 @@ export async function analyzeTranscript(transcriptText: string, videoUrl: string
                     properties: {
                       reference_type: { type: Type.STRING },
                       reference: { type: Type.STRING },
+                      reference_key: { type: Type.STRING },
                       match_type: { type: Type.STRING },
                       confidence_score: { type: Type.NUMBER },
                       evidence_text: { type: Type.STRING },
                       explanation: { type: Type.STRING },
+                      topic_tags: { type: Type.ARRAY, items: { type: Type.STRING } },
                       verse_text: { type: Type.STRING },
                       surah: { type: Type.NUMBER },
                       ayah: { type: Type.NUMBER },
@@ -156,7 +164,7 @@ export async function analyzeTranscript(transcriptText: string, videoUrl: string
                       chapter: { type: Type.NUMBER },
                       verse: { type: Type.NUMBER },
                     },
-                    required: ["reference_type", "reference", "match_type", "confidence_score", "evidence_text", "explanation"],
+                    required: ["reference_type", "reference", "reference_key", "match_type", "confidence_score", "evidence_text", "explanation", "topic_tags"],
                   },
                 },
               },
@@ -192,10 +200,12 @@ export async function analyzeTranscript(transcriptText: string, videoUrl: string
               properties: {
                 reference_type: { type: Type.STRING },
                 reference: { type: Type.STRING },
+                reference_key: { type: Type.STRING },
                 match_type: { type: Type.STRING },
                 confidence_score: { type: Type.NUMBER },
                 evidence_text: { type: Type.STRING },
                 explanation: { type: Type.STRING },
+                topic_tags: { type: Type.ARRAY, items: { type: Type.STRING } },
                 verse_text: { type: Type.STRING },
                 surah: { type: Type.NUMBER },
                 ayah: { type: Type.NUMBER },
@@ -204,7 +214,7 @@ export async function analyzeTranscript(transcriptText: string, videoUrl: string
                 chapter: { type: Type.NUMBER },
                 verse: { type: Type.NUMBER },
               },
-              required: ["reference_type", "reference", "match_type", "confidence_score", "evidence_text", "explanation"],
+              required: ["reference_type", "reference", "reference_key", "match_type", "confidence_score", "evidence_text", "explanation", "topic_tags"],
             },
           },
           all_scripture_references: {
@@ -214,10 +224,12 @@ export async function analyzeTranscript(transcriptText: string, videoUrl: string
               properties: {
                 reference_type: { type: Type.STRING },
                 reference: { type: Type.STRING },
+                reference_key: { type: Type.STRING },
                 match_type: { type: Type.STRING },
                 confidence_score: { type: Type.NUMBER },
                 evidence_text: { type: Type.STRING },
                 explanation: { type: Type.STRING },
+                topic_tags: { type: Type.ARRAY, items: { type: Type.STRING } },
                 verse_text: { type: Type.STRING },
                 surah: { type: Type.NUMBER },
                 ayah: { type: Type.NUMBER },
@@ -226,7 +238,7 @@ export async function analyzeTranscript(transcriptText: string, videoUrl: string
                 chapter: { type: Type.NUMBER },
                 verse: { type: Type.NUMBER },
               },
-              required: ["reference_type", "reference", "match_type", "confidence_score", "evidence_text", "explanation"],
+              required: ["reference_type", "reference", "reference_key", "match_type", "confidence_score", "evidence_text", "explanation", "topic_tags"],
             },
           },
           entities: { type: Type.ARRAY, items: { type: Type.STRING } },
@@ -302,32 +314,34 @@ export async function generateAltTranscript(url: string, title: string): Promise
     Extract the following features in a structured format.
 
     ### SYSTEM ROLE
-    You are an expert in Qur’an structure, Bible structure, Dawah, interfaith debates, and comparative theology. Your task is to detect scripture references inside transcript segments with high accuracy.
+    You are an expert in Qur’an structure, Hadith collections (Bukhari, Muslim, etc.), Bible structure, Dawah, interfaith debates, and comparative theology. Your task is to detect scripture and knowledge references inside transcript segments with high accuracy.
 
     ### OBJECTIVE
     For each transcript segment, detect whether the speaker:
-    1. Quoted scripture directly (exact_quote)
-    2. Mentioned a scripture reference explicitly (explicit_reference)
-    3. Paraphrased a known verse (close_paraphrase)
-    4. Expressed a theological idea strongly tied to a known verse (thematic_reference)
+    1. Quoted scripture or a Hadith directly (exact_quote)
+    2. Mentioned a reference explicitly (explicit_reference)
+    3. Paraphrased a known verse or Hadith (close_paraphrase)
+    4. Expressed a theological idea strongly tied to a known reference (thematic_reference)
 
-    ### SCRIPTURE DETECTION RULES
-    - **Normalization:** Normalize all references (e.g., "Quran 112:1", "John 1:1").
-    - **Quran Rules:** Use Surah:Ayah format. Detect even if only the name of the Surah is mentioned with a clear verse paraphrase. Be very sensitive to common Dawah verses (e.g., 2:255, 3:64, 4:171, 5:72, 5:73, 112:1-4).
-    - **Bible Rules:** Use Book Chapter:Verse format. Be very sensitive to common interfaith debate verses (e.g., John 1:1, John 14:28, John 10:30, Mark 12:29, Deuteronomy 6:4).
-    - **Match Types:**
-        - exact_quote: Word-for-word citation.
-        - explicit_reference: Mentioning the chapter/verse numbers.
-        - close_paraphrase: Rephrasing the verse while maintaining its specific structure.
-        - thematic_reference: Discussing the specific content of a verse without naming it.
-    - **Confidence Scoring:**
-        - exact_quote: 0.95 - 1.0
-        - explicit_reference: 0.9 - 0.95
-        - close_paraphrase: 0.7 - 0.85
-        - thematic_reference: 0.5 - 0.7
-        - uncertain: < 0.5
-    - **Theological Context Boost:** If the video is about "Tawhid", "Trinity", or "Jesus divinity", increase sensitivity for related verses.
-    - **Accuracy First:** Do not fabricate references. If unsure, mark as "uncertain" or omit if confidence is very low.
+    ### SCRIPTURE & KNOWLEDGE DETECTION RULES
+    - **Semantic Matching:** Do NOT rely on exact text. Match meaning even if wording differs significantly (e.g., "there is no compulsion in religion" -> Quran 2:256).
+    - **Context Window:** Use surrounding text to improve accuracy.
+    - **Normalization:** Normalize all references.
+        - Quran: Q_Surah_Ayah (e.g., Q_2_256).
+        - Hadith: H_Collection_Number (e.g., H_Bukhari_1).
+        - Bible: B_Book_Chapter_Verse (e.g., B_John_3_16).
+    - **Match Types & Confidence Scoring:**
+        - exact_quote (0.95 - 1.0): Word-for-word citation from a recognized translation (e.g., KJV, Sahih International).
+        - explicit_reference (0.9 - 0.95): Speaker explicitly names the book/surah and chapter/verse.
+        - close_paraphrase (0.75 - 0.85): Core meaning and sentence structure are preserved, despite minor wording variations.
+        - thematic_reference (0.6 - 0.75): Discussion of a specific theological concept uniquely tied to a passage (e.g., "The Word was with God" -> John 1:1) without direct citation.
+    - **Topic Alignment:** Inherit relevant topic tags from the matched reference.
+    - **Accuracy First:** Only return matches with confidence > 0.6. If no strong match, return null or omit.
+
+    ### KNOWLEDGE BASE CONTEXT (HIGH PRIORITY)
+    - **Quran:** 2:255 (Ayatul Kursi), 2:256 (No compulsion), 3:64 (Common word), 4:157 (Crucifixion), 4:171 (Trinity/Jesus), 5:72-73 (Divinity of Christ), 112:1-4 (Tawhid), 5:48 (Competing in goodness), 16:125 (Invite to the way of your Lord).
+    - **Hadith:** Bukhari 1 (Intentions), Muslim 1 (Iman/Islam/Ihsan), 40 Hadith Nawawi, Hadith on the treatment of neighbors, Hadith on seeking knowledge.
+    - **Bible:** John 1:1 (The Word), John 14:28 (Father is greater), John 10:30 (I and Father are one), Mark 12:29 (Shema), Deuteronomy 6:4, Isaiah 43:10-11, Matthew 5 (Sermon on the Mount), 1 Corinthians 13 (Love).
 
     ### FEATURES TO EXTRACT
     1. Executive Summary: A high-level overview.
@@ -338,13 +352,13 @@ export async function generateAltTranscript(url: string, title: string): Promise
     6. Keywords: Relevant tags.
     7. Transcription: Provide a detailed, minute-by-minute reconstruction of the video's dialogue or narrative. Format it with timestamps like [0s] text, [60s] text, etc.
     8. Minute-by-Minute: Detailed breakdown for EVERY MINUTE.
-    9. Scripture References: A top-level list of the most significant scripture references found.
+    9. Scripture References: A top-level list of the most significant references found.
     10. All Scripture References: A consolidated list of ALL detected references across the entire video.
     11. Entities: People, religions, books, scriptures, locations.
     12. Arguments: Logical arguments.
     13. Debate Claims: Major claims in debates.
-    14. Speaker Name: Identify the main speaker(s) from the title or your knowledge.
-    15. Channel Name: Identify the YouTube channel if known.
+    14. Speaker Name: Identify the main speaker(s).
+    15. Channel Name: Identify the YouTube channel.
     
     Video URL: ${url}
     Video Title: ${title}
@@ -370,10 +384,12 @@ export async function generateAltTranscript(url: string, title: string): Promise
                     properties: {
                       reference_type: { type: Type.STRING },
                       reference: { type: Type.STRING },
+                      reference_key: { type: Type.STRING },
                       match_type: { type: Type.STRING },
                       confidence_score: { type: Type.NUMBER },
                       evidence_text: { type: Type.STRING },
                       explanation: { type: Type.STRING },
+                      topic_tags: { type: Type.ARRAY, items: { type: Type.STRING } },
                       verse_text: { type: Type.STRING },
                       surah: { type: Type.NUMBER },
                       ayah: { type: Type.NUMBER },
@@ -382,7 +398,7 @@ export async function generateAltTranscript(url: string, title: string): Promise
                       chapter: { type: Type.NUMBER },
                       verse: { type: Type.NUMBER },
                     },
-                    required: ["reference_type", "reference", "match_type", "confidence_score", "evidence_text", "explanation"],
+                    required: ["reference_type", "reference", "reference_key", "match_type", "confidence_score", "evidence_text", "explanation", "topic_tags"],
                   },
                 },
               },
@@ -419,10 +435,12 @@ export async function generateAltTranscript(url: string, title: string): Promise
               properties: {
                 reference_type: { type: Type.STRING },
                 reference: { type: Type.STRING },
+                reference_key: { type: Type.STRING },
                 match_type: { type: Type.STRING },
                 confidence_score: { type: Type.NUMBER },
                 evidence_text: { type: Type.STRING },
                 explanation: { type: Type.STRING },
+                topic_tags: { type: Type.ARRAY, items: { type: Type.STRING } },
                 verse_text: { type: Type.STRING },
                 surah: { type: Type.NUMBER },
                 ayah: { type: Type.NUMBER },
@@ -431,7 +449,7 @@ export async function generateAltTranscript(url: string, title: string): Promise
                 chapter: { type: Type.NUMBER },
                 verse: { type: Type.NUMBER },
               },
-              required: ["reference_type", "reference", "match_type", "confidence_score", "evidence_text", "explanation"],
+              required: ["reference_type", "reference", "reference_key", "match_type", "confidence_score", "evidence_text", "explanation", "topic_tags"],
             },
           },
           all_scripture_references: {
@@ -441,10 +459,12 @@ export async function generateAltTranscript(url: string, title: string): Promise
               properties: {
                 reference_type: { type: Type.STRING },
                 reference: { type: Type.STRING },
+                reference_key: { type: Type.STRING },
                 match_type: { type: Type.STRING },
                 confidence_score: { type: Type.NUMBER },
                 evidence_text: { type: Type.STRING },
                 explanation: { type: Type.STRING },
+                topic_tags: { type: Type.ARRAY, items: { type: Type.STRING } },
                 verse_text: { type: Type.STRING },
                 surah: { type: Type.NUMBER },
                 ayah: { type: Type.NUMBER },
@@ -453,7 +473,7 @@ export async function generateAltTranscript(url: string, title: string): Promise
                 chapter: { type: Type.NUMBER },
                 verse: { type: Type.NUMBER },
               },
-              required: ["reference_type", "reference", "match_type", "confidence_score", "evidence_text", "explanation"],
+              required: ["reference_type", "reference", "reference_key", "match_type", "confidence_score", "evidence_text", "explanation", "topic_tags"],
             },
           },
           entities: { type: Type.ARRAY, items: { type: Type.STRING } },
