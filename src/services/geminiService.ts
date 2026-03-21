@@ -103,7 +103,12 @@ function normalizeReferenceKey(key: string): string {
   return normalized;
 }
 
-export async function analyzeTranscript(transcriptText: string, videoUrl: string, videoTitle: string): Promise<VideoAnalysis> {
+export async function analyzeTranscript(
+  transcriptText: string, 
+  videoUrl: string, 
+  videoTitle: string,
+  onProgress?: (progress: number) => void
+): Promise<VideoAnalysis> {
   // Split transcript into chunks of ~15 minutes to ensure full processing of long videos
   const CHUNK_SIZE_MS = 15 * 60 * 1000; // 15 minutes
   const timestampRegex = /\[(\d+(?:\.\d+)?)s\]/g;
@@ -124,7 +129,6 @@ export async function analyzeTranscript(transcriptText: string, videoUrl: string
 
     // Split transcript by our float-aware regex
     const parts = transcriptText.split(/(\[(\d+(?:\.\d+)?)s\])/);
-    // parts will be [text_before, "[0s]", "0", text_after, "[5.5s]", "5.5", ...]
     
     for (let i = 0; i < numChunks; i++) {
       const startMs = i * CHUNK_SIZE_MS;
@@ -132,7 +136,6 @@ export async function analyzeTranscript(transcriptText: string, videoUrl: string
       
       let chunkTranscript = "";
       
-      // Include text before the first timestamp in the first chunk
       if (i === 0 && parts[0]) {
         chunkTranscript += parts[0];
       }
@@ -143,7 +146,6 @@ export async function analyzeTranscript(transcriptText: string, videoUrl: string
         const content = parts[j + 2] || "";
         
         const timeMs = timeVal * 1000;
-        // Last chunk should include everything remaining to be safe
         const isLastChunk = i === numChunks - 1;
         if (timeMs >= startMs && (isLastChunk ? true : timeMs < endMs)) {
           chunkTranscript += `${fullTag}${content}`;
@@ -152,17 +154,28 @@ export async function analyzeTranscript(transcriptText: string, videoUrl: string
 
       if (chunkTranscript.trim()) {
         console.log(`Processing chunk ${i + 1}/${numChunks}...`);
+        if (onProgress) {
+          // Progress from 30% to 65% for chunks
+          const chunkProgress = 30 + ((i / numChunks) * 35);
+          onProgress(Math.round(chunkProgress));
+        }
         const chunkAnalysis = await callGeminiForChunk(chunkTranscript, videoUrl, videoTitle, i + 1, numChunks);
         chunkedResults.push(chunkAnalysis);
       }
     }
 
+    if (onProgress) onProgress(65);
     // Merge results
-    return mergeAnalysisResults(chunkedResults, videoUrl, videoTitle, transcriptText);
+    const merged = await mergeAnalysisResults(chunkedResults, videoUrl, videoTitle, transcriptText);
+    if (onProgress) onProgress(70);
+    return merged;
   }
 
+  if (onProgress) onProgress(45);
   // Standard processing for shorter videos
-  return callGeminiForChunk(transcriptText, videoUrl, videoTitle, 1, 1);
+  const result = await callGeminiForChunk(transcriptText, videoUrl, videoTitle, 1, 1);
+  if (onProgress) onProgress(70);
+  return result;
 }
 
 async function callGeminiForChunk(transcriptText: string, videoUrl: string, videoTitle: string, chunkIdx: number, totalChunks: number): Promise<VideoAnalysis> {
@@ -503,11 +516,24 @@ async function mergeAnalysisResults(results: VideoAnalysis[], url: string, title
   return merged;
 }
 
-export async function generateAltTranscript(url: string, title: string): Promise<VideoAnalysis> {
+export async function generateAltTranscript(
+  url: string, 
+  title: string,
+  onProgress?: (progress: number) => void
+): Promise<VideoAnalysis> {
+  if (onProgress) onProgress(35);
+  
   const response = await ai.models.generateContent({
     model: "gemini-3.1-pro-preview",
     contents: `The transcript for this YouTube video is disabled. I need you to analyze the video content using the provided URL and your internal knowledge. 
-    Extract the following features in a structured format. **CRITICAL:** Ensure you analyze the ENTIRE video length, even if it is 60 minutes or longer. Do not truncate your analysis. You MUST provide a comprehensive breakdown of the full duration, including a detailed minute-by-minute breakdown for the entire video.
+    Extract the following features in a structured format. 
+
+    **CRITICAL INSTRUCTION ON DURATION:** 
+    You MUST analyze the ENTIRE video length. If the video is 60 minutes long, your analysis MUST cover all 60 minutes. 
+    Do NOT stop after 10 or 15 minutes. 
+    Your 'minute_by_minute' breakdown MUST continue until the very end of the video.
+    Your 'linkable_timestamps' MUST include points from the beginning, middle, and end of the video.
+    If you are unsure of the exact length, assume it is a long-form video and provide at least 40-60 minutes of breakdown if the content allows.
 
     ### SYSTEM ROLE
     You are an expert in Qur’an structure, Hadith collections (Bukhari, Muslim, etc.), Bible structure, Dawah, interfaith debates, and comparative theology. Your task is to detect scripture and knowledge references inside transcript segments with high accuracy.
@@ -716,6 +742,8 @@ export async function generateAltTranscript(url: string, title: string): Promise
     },
   });
 
+  if (onProgress) onProgress(65);
+
   try {
     const result = JSON.parse(response.text || "{}");
 
@@ -742,6 +770,7 @@ export async function generateAltTranscript(url: string, title: string): Promise
       }));
     }
 
+    if (onProgress) onProgress(70);
     return { ...result, title, url };
   } catch (e) {
     console.error("Failed to parse Gemini alt response", e);

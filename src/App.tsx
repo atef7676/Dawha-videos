@@ -522,11 +522,15 @@ export default function App() {
       let fullTranscriptText = '';
       if (fallback && !providedTranscript) {
         setStatus(`Generating AI alternative for ${videoTitleToUse}...`);
-        analysis = await generateAltTranscript(videoUrl, videoTitleToUse);
+        analysis = await generateAltTranscript(videoUrl, videoTitleToUse, (p) => {
+          if (!batchProgress) setProgress(p);
+        });
         fullTranscriptText = analysis.transcription || analysis.executive_summary;
       } else {
         setStatus(`Analyzing ${videoTitleToUse} with AI...`);
-        analysis = await analyzeTranscript(finalTranscriptText, videoUrl, videoTitleToUse);
+        analysis = await analyzeTranscript(finalTranscriptText, videoUrl, videoTitleToUse, (p) => {
+          if (!batchProgress) setProgress(p);
+        });
         fullTranscriptText = analysis.transcription || finalTranscriptText;
       }
 
