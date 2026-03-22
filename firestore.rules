@@ -106,7 +106,8 @@ service cloud.firestore {
         'themes_and_topics', 'theological_topics', 'key_points', 'keywords',
         'minute_by_minute', 'transcript', 'scripture_references', 'entities',
         'arguments', 'debate_claims', 'speaker_name', 'channel_name', 'channel_url',
-        'video_timestamp', 'token_count', 'userId', 'createdAt', 'all_scripture_references'
+        'video_timestamp', 'token_count', 'userId', 'createdAt', 'all_scripture_references',
+        'official_description', 'upload_date'
       ];
       return hasRequiredFields(['youtube_id', 'title', 'url', 'userId', 'createdAt']) &&
              hasOnlyAllowedFields(data, allowedFields) &&
@@ -115,6 +116,8 @@ service cloud.firestore {
              data.url is string && data.url.size() > 0 && data.url.size() < 1000 &&
              data.userId is string && data.userId == request.auth.uid &&
              data.createdAt is timestamp &&
+             (data.official_description == null || (data.official_description is string && data.official_description.size() < 50000)) &&
+             (data.upload_date == null || (data.upload_date is string && data.upload_date.size() < 200)) &&
              (data.executive_summary == null || (data.executive_summary is string && data.executive_summary.size() < 20000)) &&
              (data.linkable_timestamps == null || data.linkable_timestamps is list) &&
              (data.themes_and_topics == null || data.themes_and_topics is map) &&
@@ -187,7 +190,7 @@ service cloud.firestore {
     // ===============================================================
 
     match /videos/{videoId} {
-      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow read: if true;
       allow create: if isAuthenticated() && isValidVideo(request.resource.data);
       allow update: if isOwner(resource.data.userId) && isValidVideo(request.resource.data) &&
                       request.resource.data.userId == resource.data.userId &&
@@ -195,7 +198,7 @@ service cloud.firestore {
       allow delete: if isOwner(resource.data.userId) || isAdmin();
 
       match /segments/{segmentId} {
-        allow read: if isOwner(get(/databases/$(database)/documents/videos/$(videoId)).data.userId) || isAdmin();
+        allow read: if true;
         allow create: if isAuthenticated() && isValidSegment(request.resource.data, videoId) &&
                         isOwner(get(/databases/$(database)/documents/videos/$(videoId)).data.userId);
         allow update: if isOwner(get(/databases/$(database)/documents/videos/$(videoId)).data.userId) &&
@@ -206,7 +209,7 @@ service cloud.firestore {
     }
 
     match /video_references/{referenceId} {
-      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow read: if true;
       allow create: if isAuthenticated() && isValidVideoReference(request.resource.data);
       allow update: if isOwner(resource.data.userId) && isValidVideoReference(request.resource.data) &&
                       request.resource.data.userId == resource.data.userId &&
@@ -215,7 +218,7 @@ service cloud.firestore {
     }
 
     match /knowledge_topics/{topicId} {
-      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow read: if true;
       allow create: if isAuthenticated() && isValidKnowledgeTopic(request.resource.data);
       allow update: if isOwner(resource.data.userId) && isValidKnowledgeTopic(request.resource.data) &&
                       request.resource.data.userId == resource.data.userId &&
@@ -224,7 +227,7 @@ service cloud.firestore {
     }
 
     match /knowledge_entries/{entryId} {
-      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow read: if true;
       allow create: if isAuthenticated() && isValidKnowledgeEntry(request.resource.data);
       allow update: if isOwner(resource.data.userId) && isValidKnowledgeEntry(request.resource.data) &&
                       request.resource.data.userId == resource.data.userId &&
@@ -233,7 +236,7 @@ service cloud.firestore {
     }
 
     match /taxonomy/{taxonomyId} {
-      allow read: if isOwner(resource.data.userId) || isAdmin();
+      allow read: if true;
       allow create: if isAuthenticated() && isValidTaxonomy(request.resource.data);
       allow update: if isOwner(resource.data.userId) && isValidTaxonomy(request.resource.data) &&
                       request.resource.data.userId == resource.data.userId;

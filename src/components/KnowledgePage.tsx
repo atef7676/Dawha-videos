@@ -83,7 +83,6 @@ export default function KnowledgePage({ onBack, initialSelection }: KnowledgePag
 
     const q = query(
       collection(db, 'knowledge_topics'),
-      where('userId', '==', auth.currentUser.uid),
       orderBy('updatedAt', 'desc')
     );
 

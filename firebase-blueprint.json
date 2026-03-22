@@ -77,6 +77,8 @@
         "speaker_name": { "type": "string" },
         "channel_name": { "type": "string" },
         "channel_url": { "type": "string" },
+        "official_description": { "type": "string", "description": "Full YouTube video description" },
+        "upload_date": { "type": "string", "description": "Video upload date from YouTube" },
         "video_timestamp": { "type": "string" },
         "token_count": { "type": "number" },
         "all_scripture_references": {
