@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { 
   Search, BookOpen, ChevronLeft, Loader2, Share2, Download, 
   Twitter, Facebook, MessageCircle, Copy, Check, ExternalLink,
@@ -30,6 +31,9 @@ interface KnowledgePageProps {
 type KBTab = 'topics' | 'quran' | 'taxonomy' | 'audit' | 'qa';
 
 export default function KnowledgePage({ onBack, initialSelection }: KnowledgePageProps) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<KBTab>('topics');
   
   // Quran State
@@ -69,6 +73,18 @@ export default function KnowledgePage({ onBack, initialSelection }: KnowledgePag
 
   const exportRef = useRef<HTMLDivElement>(null);
   const ayahRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
+
+  useEffect(() => {
+    const topicId = searchParams.get('topic');
+    if (topicId && topics.length > 0) {
+      const topic = topics.find(t => t.id === topicId);
+      if (topic) {
+        setSelectedTopic(topic);
+      }
+    } else if (!topicId) {
+      setSelectedTopic(null);
+    }
+  }, [searchParams, topics]);
 
   useEffect(() => {
     const fetchSurahs = async () => {
@@ -328,7 +344,7 @@ export default function KnowledgePage({ onBack, initialSelection }: KnowledgePag
                   ).map((topic) => (
                     <button
                       key={topic.id}
-                      onClick={() => setSelectedTopic(topic)}
+                      onClick={() => navigate(`/knowledge?topic=${topic.id}`)}
                       className={`w-full flex items-center justify-between p-4 rounded-2xl transition-all group ${selectedTopic?.id === topic.id ? 'bg-[#141414] text-white shadow-lg' : 'hover:bg-[#141414]/5'}`}
                     >
                       <div className="text-left">

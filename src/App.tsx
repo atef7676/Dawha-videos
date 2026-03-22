@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
-import { Search, Plus, Video, Clock, ChevronRight, Loader2, Play, ExternalLink, Database, Download, X, Trash2, LogIn, LogOut, User, BookOpen, ArrowLeft, FileText } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Search, Plus, Video, Clock, ChevronRight, Loader2, Play, ExternalLink, Database, Download, X, Trash2, LogIn, LogOut, User, BookOpen, ArrowLeft, FileText, Share2, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { Helmet } from 'react-helmet-async';
+import { useNavigate, useLocation, useParams, useSearchParams } from 'react-router-dom';
 import KnowledgePage from './components/KnowledgePage';
 import { quranService } from './services/quranService';
 import HistoryPage from './HistoryPage';
@@ -76,6 +78,76 @@ interface SearchResult extends Segment {
   speaker_name?: string;
   channel_name?: string;
 }
+
+const SEO = ({ title, description, image, url, videoData }: { title?: string, description?: string, image?: string, url?: string, videoData?: IndexedVideo }) => {
+  const siteTitle = "Theological Video Indexer";
+  const fullTitle = title ? `${title} | ${siteTitle}` : siteTitle;
+  const siteDescription = "Advanced analysis for Dawah and Interfaith debate. Indexing theological videos with scripture references and logical arguments.";
+  const fullDescription = description || siteDescription;
+  const siteUrl = window.location.origin;
+  const fullUrl = url ? `${siteUrl}${url}` : siteUrl;
+  const fullImage = image || `${siteUrl}/og-image.png`;
+
+  const jsonLd = useMemo(() => {
+    if (videoData) {
+      return {
+        "@context": "https://schema.org",
+        "@type": "VideoObject",
+        "name": videoData.title,
+        "description": videoData.executive_summary,
+        "thumbnailUrl": `https://img.youtube.com/vi/${videoData.youtube_id}/maxresdefault.jpg`,
+        "uploadDate": videoData.upload_date || videoData.created_at?.toDate()?.toISOString(),
+        "contentUrl": videoData.url,
+        "embedUrl": `https://www.youtube.com/embed/${videoData.youtube_id}`,
+        "interactionStatistic": {
+          "@type": "InteractionCounter",
+          "interactionType": { "@type": "WatchAction" }
+        }
+      };
+    }
+    return {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "name": siteTitle,
+      "url": siteUrl,
+      "description": siteDescription
+    };
+  }, [videoData, siteUrl]);
+
+  return (
+    <Helmet>
+      <title>{fullTitle}</title>
+      <meta name="description" content={fullDescription} />
+      <link rel="canonical" href={fullUrl} />
+
+      {/* Open Graph / Facebook */}
+      <meta property="og:type" content={videoData ? "video.other" : "website"} />
+      <meta property="og:url" content={fullUrl} />
+      <meta property="og:title" content={fullTitle} />
+      <meta property="og:description" content={fullDescription} />
+      <meta property="og:image" content={fullImage} />
+
+      {/* Twitter */}
+      <meta property="twitter:card" content="summary_large_image" />
+      <meta property="twitter:url" content={fullUrl} />
+      <meta property="twitter:title" content={fullTitle} />
+      <meta property="twitter:description" content={fullDescription} />
+      <meta property="twitter:image" content={fullImage} />
+
+      {/* Additional SEO Tags */}
+      <meta name="robots" content="index, follow" />
+      <meta name="theme-color" content="#F5F5F0" />
+      {videoData?.keywords && (
+        <meta name="keywords" content={videoData.keywords.join(', ')} />
+      )}
+
+      {/* Structured Data */}
+      <script type="application/ld+json">
+        {JSON.stringify(jsonLd)}
+      </script>
+    </Helmet>
+  );
+};
 
 const extractYoutubeId = (url: string) => {
   const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
@@ -294,6 +366,7 @@ export default function App() {
   const [forceIndex, setForceIndex] = useState(false);
   const [channelUrl, setChannelUrl] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [progress, setProgress] = useState(0);
   const [stopRequested, setStopRequested] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
@@ -350,6 +423,56 @@ export default function App() {
   const [exportTarget, setExportTarget] = useState<IndexedVideo | IndexedVideo[] | null>(null);
   const [showTranscript, setShowTranscript] = useState(false);
   const [currentProcessingTranscript, setCurrentProcessingTranscript] = useState<string>('');
+
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+
+  // Sync state with URL on mount and location change
+  useEffect(() => {
+    const path = location.pathname;
+    if (path === '/knowledge') {
+      setCurrentPage('knowledge');
+      setSelectedVideo(null);
+    } else if (path === '/history') {
+      setCurrentPage('history');
+      setSelectedVideo(null);
+    } else if (path.startsWith('/video/')) {
+      const videoId = path.split('/')[2];
+      const video = videos.find(v => v.id === videoId);
+      if (video) {
+        setSelectedVideo(video);
+        setCurrentPage('main');
+      }
+    } else {
+      setCurrentPage('main');
+      setSelectedVideo(null);
+    }
+
+    const q = searchParams.get('q');
+    if (q) {
+      setSearchQuery(q);
+      // Trigger search if not already done
+      if (searchResults.length === 0 && videos.length > 0) {
+        handleSearch(undefined, q);
+      }
+    }
+  }, [location.pathname, searchParams, videos]);
+
+  const handleShare = () => {
+    const url = window.location.href;
+    if (navigator.share) {
+      navigator.share({
+        title: selectedVideo?.title || t.title,
+        text: selectedVideo?.executive_summary || t.subtitle,
+        url: url,
+      }).catch(console.error);
+    } else {
+      navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -418,6 +541,18 @@ export default function App() {
     setError(null);
     const effectiveQuery = overrideQuery !== undefined ? overrideQuery : searchQuery;
     
+    // Update URL if needed
+    const params = new URLSearchParams(location.search);
+    const currentQ = params.get('q') || '';
+    if (effectiveQuery.trim() !== currentQ) {
+      if (effectiveQuery.trim()) {
+        params.set('q', effectiveQuery);
+      } else {
+        params.delete('q');
+      }
+      navigate(`${location.pathname}?${params.toString()}`, { replace: true });
+    }
+
     if (!effectiveQuery.trim()) {
       setSearchResults([]);
       return;
@@ -956,6 +1091,12 @@ export default function App() {
 
   return (
     <ErrorBoundary>
+      <SEO 
+        title={selectedVideo?.title || (currentPage === 'knowledge' ? t.knowledgeBase : currentPage === 'history' ? t.history : undefined)}
+        description={selectedVideo?.executive_summary}
+        videoData={selectedVideo || undefined}
+        url={location.pathname + location.search}
+      />
       <div className="min-h-screen bg-[#F5F5F0] text-[#141414] font-sans" dir={language === 'ar' ? 'rtl' : 'ltr'}>
       
       {/* Progress Overlay */}
@@ -1045,7 +1186,7 @@ export default function App() {
                 {t.switchLang}
               </button>
               <button 
-                onClick={() => setCurrentPage(currentPage === 'main' ? 'history' : 'main')}
+                onClick={() => navigate('/history')}
                 className="text-sm font-medium text-[#141414]/60 hover:text-[#141414]"
               >
                 {currentPage === 'main' ? t.history : 'Indexer'}
@@ -1081,14 +1222,14 @@ export default function App() {
             <div className="flex items-center gap-6">
               {user && (
                 <button 
-                  onClick={() => setCurrentPage('main')}
+                  onClick={() => navigate('/')}
                   className={`text-xs font-bold uppercase tracking-widest transition-all ${currentPage === 'main' ? 'text-[#141414]' : 'text-[#141414]/40 hover:text-[#141414]'}`}
                 >
                   Indexer
                 </button>
               )}
               <button 
-                onClick={() => setCurrentPage('knowledge')}
+                onClick={() => navigate('/knowledge')}
                 className={`text-xs font-bold uppercase tracking-widest transition-all ${currentPage === 'knowledge' ? 'text-[#141414]' : 'text-[#141414]/40 hover:text-[#141414]'}`}
               >
                 Knowledge Base
@@ -1134,14 +1275,14 @@ export default function App() {
       <main className={`max-w-6xl mx-auto px-6 py-12 ${!selectedVideo && currentPage !== 'knowledge' ? 'grid grid-cols-1 lg:grid-cols-12 gap-12' : 'block'}`}>
         {currentPage === 'knowledge' ? (
           <KnowledgePage 
-            onBack={() => setCurrentPage('main')} 
+            onBack={() => navigate('/')} 
             initialSelection={knowledgeBaseSelection} 
           />
         ) : currentPage === 'history' ? (
           <div className="w-full">
             <div className="flex items-center justify-between mb-8">
               <button 
-                onClick={() => setCurrentPage('main')}
+                onClick={() => navigate('/')}
                 className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-[#141414]/40 hover:text-[#141414] transition-colors group"
               >
                 <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
@@ -1169,13 +1310,22 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="space-y-8"
               >
-                <button 
-                  onClick={() => setSelectedVideo(null)}
-                  className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-[#141414]/40 hover:text-[#141414] transition-colors mb-8 group"
-                >
-                  <ArrowLeft className={`w-4 h-4 group-hover:${language === 'ar' ? 'translate-x-1' : '-translate-x-1'} transition-transform ${language === 'ar' ? 'rotate-180' : ''}`} />
-                  {t.backToLibrary}
-                </button>
+                <div className="flex items-center justify-between mb-8">
+                  <button 
+                    onClick={() => navigate('/')}
+                    className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-[#141414]/40 hover:text-[#141414] transition-colors group"
+                  >
+                    <ArrowLeft className={`w-4 h-4 group-hover:${language === 'ar' ? 'translate-x-1' : '-translate-x-1'} transition-transform ${language === 'ar' ? 'rotate-180' : ''}`} />
+                    {t.backToLibrary}
+                  </button>
+                  <button 
+                    onClick={handleShare}
+                    className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-[#141414]/40 hover:text-[#141414] transition-colors group"
+                  >
+                    {copied ? <Check className="w-4 h-4 text-emerald-500" /> : <Share2 className="w-4 h-4" />}
+                    {copied ? 'Copied!' : 'Share'}
+                  </button>
+                </div>
 
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1">
@@ -1728,7 +1878,7 @@ export default function App() {
                         <div key={video.id} className="group relative">
                           <div className="flex items-center gap-2">
                             <button
-                              onClick={() => viewVideoSegments(video)}
+                              onClick={() => navigate(`/video/${video.id}`)}
                               className={`flex-1 text-left p-4 rounded-2xl border transition-all flex items-center gap-4 ${
                                 selectedVideo?.id === video.id 
                                   ? 'bg-white border-[#141414] shadow-md ring-1 ring-[#141414]/5' 
