@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
+import { populateKnowledgeBaseFromVideos, clearKnowledgeBase } from '../services/dataBridgeService';
 import { 
   Search, BookOpen, ChevronLeft, Loader2, Share2, Download, 
   Twitter, Facebook, MessageCircle, Copy, Check, ExternalLink,
@@ -20,17 +21,18 @@ import {
   addDoc, 
   serverTimestamp 
 } from 'firebase/firestore';
-import { db, auth } from '../firebase';
+import { db, auth, handleFirestoreError, OperationType } from '../firebase';
 import { KnowledgeTopic, KnowledgeEntry, refreshTopicSummary, askKnowledgeBase } from '../services/knowledgeService';
 
 interface KnowledgePageProps {
   onBack: () => void;
   initialSelection?: any;
+  user?: import('firebase/auth').User | null;
 }
 
 type KBTab = 'topics' | 'quran' | 'taxonomy' | 'audit' | 'qa';
 
-export default function KnowledgePage({ onBack, initialSelection }: KnowledgePageProps) {
+export default function KnowledgePage({ onBack, initialSelection, user }: KnowledgePageProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -70,6 +72,10 @@ export default function KnowledgePage({ onBack, initialSelection }: KnowledgePag
     };
   } | null>(null);
   const [isQaLoading, setIsQaLoading] = useState(false);
+  const [isPopulating, setIsPopulating] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const isAdmin = user?.email === 'atefhassan76@gmail.com';
 
   const exportRef = useRef<HTMLDivElement>(null);
   const ayahRefs = useRef<{ [key: number]: HTMLDivElement | null }>({});
@@ -95,20 +101,23 @@ export default function KnowledgePage({ onBack, initialSelection }: KnowledgePag
   }, []);
 
   useEffect(() => {
-    if (!auth.currentUser) return;
+    if (!user) return;
 
     const q = query(
       collection(db, 'knowledge_topics'),
+      where('userId', '==', user.uid),
       orderBy('updatedAt', 'desc')
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as KnowledgeTopic));
       setTopics(list);
+    }, (err) => {
+      handleFirestoreError(err, OperationType.LIST, 'knowledge_topics');
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (!selectedTopic?.id) {
@@ -125,6 +134,8 @@ export default function KnowledgePage({ onBack, initialSelection }: KnowledgePag
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const list = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as KnowledgeEntry));
       setEntries(list);
+    }, (err) => {
+      handleFirestoreError(err, OperationType.LIST, 'knowledge_entries');
     });
 
     return () => unsubscribe();
@@ -280,7 +291,51 @@ export default function KnowledgePage({ onBack, initialSelection }: KnowledgePag
             </div>
           </div>
 
-          <div className="flex items-center bg-[#141414]/5 p-1 rounded-full">
+          <div className="flex items-center gap-4">
+            {isAdmin && (
+              <div className="flex items-center gap-2">
+                {confirmClear ? (
+                  <div className="flex items-center gap-2 bg-red-50 p-1 rounded-full border border-red-100">
+                    <span className="text-[8px] font-bold uppercase tracking-widest text-red-600 px-2">Confirm Clear?</span>
+                    <button 
+                      onClick={async () => {
+                        if (user) {
+                          setIsClearing(true);
+                          try {
+                            await clearKnowledgeBase(user.uid);
+                            setConfirmClear(false);
+                          } catch (e) {
+                            console.error(e);
+                          } finally {
+                            setIsClearing(false);
+                          }
+                        }
+                      }}
+                      disabled={isClearing}
+                      className="px-3 py-1 bg-red-600 text-white rounded-full text-[8px] font-bold uppercase tracking-widest hover:bg-red-700 transition-all disabled:opacity-50"
+                    >
+                      {isClearing ? 'Clearing...' : 'Yes, Delete'}
+                    </button>
+                    <button 
+                      onClick={() => setConfirmClear(false)}
+                      className="px-3 py-1 bg-white text-[#141414]/40 rounded-full text-[8px] font-bold uppercase tracking-widest hover:bg-[#141414]/5 transition-all"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button 
+                    onClick={() => setConfirmClear(true)}
+                    className="px-4 py-2 bg-red-50 text-red-600 rounded-full text-[10px] font-bold uppercase tracking-widest hover:bg-red-100 transition-all flex items-center gap-2"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    Clear KB
+                  </button>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center bg-[#141414]/5 p-1 rounded-full">
             <button 
               onClick={() => setActiveTab('topics')}
               className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest transition-all ${activeTab === 'topics' ? 'bg-white shadow-sm text-[#141414]' : 'text-[#141414]/40 hover:text-[#141414]'}`}
@@ -306,8 +361,9 @@ export default function KnowledgePage({ onBack, initialSelection }: KnowledgePag
               Audit
             </button>
           </div>
+        </div>
 
-          <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2">
             <div className="w-8 h-8 bg-[#141414] text-white rounded-full flex items-center justify-center text-xs font-bold">
               UKB
             </div>
@@ -338,24 +394,62 @@ export default function KnowledgePage({ onBack, initialSelection }: KnowledgePag
                   </div>
                 </div>
                 <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
-                  {topics.filter(t => 
-                    t.title.toLowerCase().includes(topicFilter.toLowerCase()) || 
-                    t.categories?.some(cat => cat.toLowerCase().includes(topicFilter.toLowerCase()))
-                  ).map((topic) => (
-                    <button
-                      key={topic.id}
-                      onClick={() => navigate(`/knowledge?topic=${topic.id}`)}
-                      className={`w-full flex items-center justify-between p-4 rounded-2xl transition-all group ${selectedTopic?.id === topic.id ? 'bg-[#141414] text-white shadow-lg' : 'hover:bg-[#141414]/5'}`}
-                    >
-                      <div className="text-left">
-                        <p className="text-sm font-medium">{topic.title}</p>
-                        <p className={`text-[10px] opacity-60 ${selectedTopic?.id === topic.id ? 'text-white/60' : ''}`}>
-                          Last updated: {topic.updatedAt?.toDate().toLocaleDateString()}
-                        </p>
+                  {topics.length === 0 ? (
+                    <div className="p-6 text-center space-y-4">
+                      <div className="w-12 h-12 bg-[#141414]/5 rounded-full flex items-center justify-center mx-auto">
+                        <Database className="w-6 h-6 text-[#141414]/20" />
                       </div>
-                      <ChevronRight className={`w-4 h-4 transition-transform ${selectedTopic?.id === topic.id ? 'translate-x-1' : 'opacity-20 group-hover:opacity-100'}`} />
-                    </button>
-                  ))}
+                      <div className="space-y-1">
+                        <h3 className="text-xs font-bold uppercase tracking-widest">Knowledge Base Empty</h3>
+                        <p className="text-[10px] text-[#141414]/40">No theological topics have been indexed yet.</p>
+                      </div>
+                      <div className="pt-4 space-y-2">
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/60">Suggested Actions:</p>
+                        <button 
+                          onClick={async () => {
+                            if (auth.currentUser) {
+                              setIsPopulating(true);
+                              try {
+                                await populateKnowledgeBaseFromVideos(auth.currentUser.uid);
+                                alert('Knowledge Base population started.');
+                              } catch (e) {
+                                console.error(e);
+                                alert('Failed to populate knowledge base.');
+                              } finally {
+                                setIsPopulating(false);
+                              }
+                            }
+                          }}
+                          disabled={isPopulating}
+                          className="w-full px-4 py-2 bg-[#141414] text-white rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-[#141414]/90 transition-all disabled:opacity-50"
+                        >
+                          {isPopulating ? <Loader2 className="w-4 h-4 animate-spin mx-auto" /> : 'Populate Knowledge Base'}
+                        </button>
+                        <button className="w-full px-4 py-2 bg-[#141414]/5 text-[#141414] rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-[#141414]/10 transition-all">
+                          Browse Indexed Materials
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    topics.filter(t => 
+                      t.title.toLowerCase().includes(topicFilter.toLowerCase()) || 
+                      t.categories?.some(cat => cat.toLowerCase().includes(topicFilter.toLowerCase()))
+                    ).map((topic) => (
+                      <button
+                        key={topic.id}
+                        onClick={() => navigate(`/knowledge?topic=${topic.id}`)}
+                        className={`w-full flex items-center justify-between p-4 rounded-2xl transition-all group ${selectedTopic?.id === topic.id ? 'bg-[#141414] text-white shadow-lg' : 'hover:bg-[#141414]/5'}`}
+                      >
+                        <div className="text-left">
+                          <p className="text-sm font-medium">{topic.title}</p>
+                          <p className={`text-[10px] opacity-60 ${selectedTopic?.id === topic.id ? 'text-white/60' : ''}`}>
+                            Last updated: {topic.updatedAt?.toDate().toLocaleDateString()}
+                          </p>
+                        </div>
+                        <ChevronRight className={`w-4 h-4 transition-transform ${selectedTopic?.id === topic.id ? 'translate-x-1' : 'opacity-20 group-hover:opacity-100'}`} />
+                      </button>
+                    ))
+                  )}
                 </div>
               </div>
             </div>
@@ -425,6 +519,16 @@ export default function KnowledgePage({ onBack, initialSelection }: KnowledgePag
                                   className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/30 hover:text-[#141414] flex items-center gap-1"
                                 >
                                   Source <ExternalLink className="w-3 h-3" />
+                                </a>
+                              )}
+                              {entry.metadata?.externalLink && (
+                                <a 
+                                  href={entry.metadata.externalLink} 
+                                  target="_blank" 
+                                  rel="noreferrer"
+                                  className="text-[10px] font-bold uppercase tracking-widest text-emerald-600/60 hover:text-emerald-600 flex items-center gap-1"
+                                >
+                                  View Scripture <ExternalLink className="w-3 h-3" />
                                 </a>
                               )}
                             </div>

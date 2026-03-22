@@ -15,6 +15,52 @@ import { db } from "../firebase";
 import { VideoAnalysis, Argument } from "./geminiService";
 import { GoogleGenAI } from "@google/genai";
 
+export interface QuranVerse {
+  id?: string;
+  surah_number: number;
+  surah_name_en: string;
+  surah_name_ar: string;
+  ayah_number: number;
+  text_ar: string;
+  text_en: string;
+  normalized_text: string;
+  topics: string[];
+  keywords: string[];
+  revelation_type: 'Meccan' | 'Medinan';
+}
+
+export interface BibleVerse {
+  id?: string;
+  book: string;
+  chapter: number;
+  verse: number;
+  text_en: string;
+  normalized_text: string;
+  topics: string[];
+  keywords: string[];
+}
+
+export interface ScriptureUsage {
+  id?: string;
+  video_id: string;
+  timestamp: number;
+  scripture_id: string;
+  context: string;
+  confidence_score: number;
+}
+
+export interface KnowledgeBaseEntry {
+  id?: string;
+  title: string;
+  type: 'topic' | 'concept' | 'question';
+  content: string;
+  topics: string[];
+  keywords: string[];
+  related_quran: string[];
+  related_bible: string[];
+  related_videos: string[];
+}
+
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 export interface KnowledgeTopic {
@@ -250,6 +296,22 @@ export async function refreshTopicSummary(topicId: string, userId: string) {
   });
 }
 
+export const addScriptureUsage = async (usage: ScriptureUsage) => {
+  const usageRef = collection(db, 'scripture_usage');
+  await addDoc(usageRef, { ...usage, createdAt: serverTimestamp() });
+};
+
+export const getKnowledgeBaseEntries = async () => {
+  const kbRef = collection(db, 'knowledge_base');
+  const snapshot = await getDocs(kbRef);
+  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as KnowledgeBaseEntry));
+};
+
+export const addKnowledgeBaseEntry = async (entry: KnowledgeBaseEntry) => {
+  const kbRef = collection(db, 'knowledge_base');
+  await addDoc(kbRef, { ...entry, createdAt: serverTimestamp() });
+};
+
 function cosineSimilarity(vecA: number[], vecB: number[]): number {
   if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
   const dotProduct = vecA.reduce((sum, val, i) => sum + val * vecB[i], 0);
@@ -332,7 +394,7 @@ export async function askKnowledgeBase(queryText: string, userId: string): Promi
   });
 
   // 4. Retrieve Entries (Multi-Field Search)
-  // Search in matched topics + direct entry search
+  // Search in matched topics + direct entry search + global search index
   let retrievedEntries: KnowledgeEntry[] = [];
   
   // A. From matched topics
@@ -343,7 +405,14 @@ export async function askKnowledgeBase(queryText: string, userId: string): Promi
     retrievedEntries.push(...topicEntrySnapshots.flatMap(s => s.docs.map(d => ({ id: d.id, ...d.data() } as KnowledgeEntry))));
   }
 
-  // B. Fallback: Direct keyword search on all entries if few results
+  // B. Search global_search_index
+  const globalSearchSnapshot = await getDocs(query(collection(db, "global_search_index"), where("userId", "==", userId)));
+  const globalEntries = globalSearchSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as KnowledgeEntry));
+  retrievedEntries.push(...globalEntries.filter(entry => 
+    searchTerms.some(term => entry.content.toLowerCase().includes(term.toLowerCase()))
+  ));
+
+  // C. Fallback: Direct keyword search on all entries if few results
   if (retrievedEntries.length < 5) {
     const allEntriesSnapshot = await getDocs(query(collection(db, "knowledge_entries"), where("userId", "==", userId)));
     const allEntries = allEntriesSnapshot.docs.map(d => ({ id: d.id, ...d.data() } as KnowledgeEntry));
@@ -371,7 +440,7 @@ export async function askKnowledgeBase(queryText: string, userId: string): Promi
 
   if (rankedEntries.length === 0) {
     return {
-      answer: "No indexed evidence found in the knowledge base for this specific query.",
+      answer: "No exact match found. Showing closest related insights.",
       sources: [],
       debug: {
         expandedQuery: expansion.expandedTerms,

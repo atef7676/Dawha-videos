@@ -63,8 +63,8 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
-          (request.auth.token.email == "atefhassan76@gmail.com" && request.auth.token.email_verified == true));
+        ((get(/databases/$(database)/documents/users/$(request.auth.uid)).exists && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+          (request.auth.token.email == "atefhassan76@gmail.com"));
     }
 
     function hasRequiredFields(fields) {
@@ -147,21 +147,25 @@ service cloud.firestore {
     }
 
     function isValidKnowledgeTopic(data) {
-      let allowedFields = ['title', 'description', 'categories', 'related_scriptures', 'cross_faith_comparisons', 'userId', 'createdAt', 'updatedAt'];
+      let allowedFields = ['title', 'normalized_name', 'description', 'source', 'video_count', 'categories', 'related_scriptures', 'cross_faith_comparisons', 'embedding', 'userId', 'createdAt', 'updatedAt'];
       return hasRequiredFields(['title', 'userId', 'createdAt']) &&
              hasOnlyAllowedFields(data, allowedFields) &&
              data.title is string && data.title.size() > 0 && data.title.size() < 500 &&
              data.userId == request.auth.uid &&
              data.createdAt is timestamp &&
+             (data.normalized_name == null || data.normalized_name is string) &&
              (data.description == null || (data.description is string && data.description.size() < 10000)) &&
+             (data.source == null || data.source is string) &&
+             (data.video_count == null || data.video_count is number) &&
              (data.categories == null || data.categories is list) &&
              (data.related_scriptures == null || data.related_scriptures is list) &&
              (data.cross_faith_comparisons == null || (data.cross_faith_comparisons is string && data.cross_faith_comparisons.size() < 10000)) &&
+             (data.embedding == null || data.embedding is list) &&
              (data.updatedAt == null || data.updatedAt is timestamp);
     }
 
     function isValidKnowledgeEntry(data) {
-      let allowedFields = ['topicId', 'sourceType', 'sourceId', 'content', 'speaker', 'timestamp', 'metadata', 'userId', 'createdAt'];
+      let allowedFields = ['title', 'type', 'topics', 'keywords', 'video_id', 'source', 'confidence', 'topicId', 'sourceType', 'sourceId', 'content', 'speaker', 'timestamp', 'metadata', 'embedding', 'userId', 'createdAt'];
       return hasRequiredFields(['topicId', 'sourceType', 'content', 'userId', 'createdAt']) &&
              hasOnlyAllowedFields(data, allowedFields) &&
              data.topicId is string &&
@@ -169,10 +173,18 @@ service cloud.firestore {
              data.content is string && data.content.size() > 0 && data.content.size() < 20000 &&
              data.userId == request.auth.uid &&
              data.createdAt is timestamp &&
+             (data.title == null || data.title is string) &&
+             (data.type == null || data.type is string) &&
+             (data.topics == null || data.topics is list) &&
+             (data.keywords == null || data.keywords is list) &&
+             (data.video_id == null || data.video_id is string) &&
+             (data.source == null || data.source is string) &&
+             (data.confidence == null || data.confidence is number) &&
              (data.sourceId == null || data.sourceId is string) &&
              (data.speaker == null || data.speaker is string) &&
              (data.timestamp == null || data.timestamp is number) &&
-             (data.metadata == null || data.metadata is map);
+             (data.metadata == null || data.metadata is map) &&
+             (data.embedding == null || data.embedding is list);
     }
 
     function isValidTaxonomy(data) {
@@ -183,6 +195,33 @@ service cloud.firestore {
              data.type in ['topic', 'theme', 'argument_type', 'category'] &&
              data.userId == request.auth.uid &&
              (data.description == null || (data.description is string && data.description.size() < 1000));
+    }
+
+    function isValidTopicVideoMap(data) {
+      let allowedFields = ['topic_id', 'video_id', 'relevance_score', 'userId', 'createdAt'];
+      return hasRequiredFields(['topic_id', 'video_id', 'relevance_score', 'userId', 'createdAt']) &&
+             hasOnlyAllowedFields(data, allowedFields) &&
+             data.topic_id is string && data.topic_id.size() > 0 &&
+             data.video_id is string && data.video_id.size() > 0 &&
+             data.relevance_score is number && data.relevance_score >= 0 && data.relevance_score <= 1 &&
+             data.userId == request.auth.uid &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidSearchIndexEntry(data) {
+      let allowedFields = [
+        'type', 'text', 'normalized_text', 'topics', 'keywords', 'video_id', 
+        'timestamp', 'speaker', 'confidence_score', 'video_title', 'youtube_id', 
+        'embedding', 'title', 'book', 'chapter', 'verse', 'surah_number', 'ayah_number',
+        'userId', 'createdAt'
+      ];
+      return hasRequiredFields(['type', 'text', 'normalized_text', 'userId', 'createdAt']) &&
+             hasOnlyAllowedFields(data, allowedFields) &&
+             data.userId == request.auth.uid &&
+             data.createdAt is timestamp &&
+             data.text is string && data.text.size() > 0 && data.text.size() < 50000 &&
+             data.normalized_text is string &&
+             (data.embedding == null || data.embedding is list);
     }
 
     // ===============================================================
@@ -219,28 +258,62 @@ service cloud.firestore {
 
     match /knowledge_topics/{topicId} {
       allow read: if true;
-      allow create: if isAuthenticated() && isValidKnowledgeTopic(request.resource.data);
-      allow update: if isOwner(resource.data.userId) && isValidKnowledgeTopic(request.resource.data) &&
+      allow create: if isAuthenticated() && (isAdmin() || isValidKnowledgeTopic(request.resource.data));
+      allow update: if isAuthenticated() && (isAdmin() || (isOwner(resource.data.userId) && isValidKnowledgeTopic(request.resource.data) &&
                       request.resource.data.userId == resource.data.userId &&
-                      request.resource.data.createdAt == resource.data.createdAt;
+                      request.resource.data.createdAt == resource.data.createdAt));
       allow delete: if isOwner(resource.data.userId) || isAdmin();
     }
 
     match /knowledge_entries/{entryId} {
       allow read: if true;
-      allow create: if isAuthenticated() && isValidKnowledgeEntry(request.resource.data);
-      allow update: if isOwner(resource.data.userId) && isValidKnowledgeEntry(request.resource.data) &&
+      allow create: if isAuthenticated() && (isAdmin() || isValidKnowledgeEntry(request.resource.data));
+      allow update: if isAuthenticated() && (isAdmin() || (isOwner(resource.data.userId) && isValidKnowledgeEntry(request.resource.data) &&
                       request.resource.data.userId == resource.data.userId &&
-                      request.resource.data.createdAt == resource.data.createdAt;
+                      request.resource.data.createdAt == resource.data.createdAt));
       allow delete: if isOwner(resource.data.userId) || isAdmin();
     }
 
     match /taxonomy/{taxonomyId} {
       allow read: if true;
-      allow create: if isAuthenticated() && isValidTaxonomy(request.resource.data);
-      allow update: if isOwner(resource.data.userId) && isValidTaxonomy(request.resource.data) &&
-                      request.resource.data.userId == resource.data.userId;
+      allow create: if isAuthenticated() && (isAdmin() || isValidTaxonomy(request.resource.data));
+      allow update: if isAuthenticated() && (isAdmin() || (isOwner(resource.data.userId) && isValidTaxonomy(request.resource.data) &&
+                      request.resource.data.userId == resource.data.userId));
       allow delete: if isOwner(resource.data.userId) || isAdmin();
+    }
+
+    match /topic_video_map/{mapId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && (isAdmin() || isValidTopicVideoMap(request.resource.data));
+      allow update: if false; // Immutable
+      allow delete: if isAdmin() || (isAuthenticated() && isOwner(resource.data.userId));
+    }
+
+    match /global_search_index/{indexId} {
+      allow read: if true;
+      allow create: if isAuthenticated() && isValidSearchIndexEntry(request.resource.data);
+      allow update: if false; // Immutable
+      allow delete: if isAdmin() || (isAuthenticated() && isOwner(resource.data.userId));
+    }
+
+    match /quran_collection/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /bible_collection/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /knowledge_base/{id} {
+      allow read: if true;
+      allow write: if isAdmin() || isAuthenticated();
+    }
+
+    match /scripture_usage/{id} {
+      allow read: if true;
+      allow create: if isAuthenticated();
     }
 
     match /users/{userId} {

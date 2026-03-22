@@ -13,6 +13,7 @@ import { quranService } from './services/quranService';
 import HistoryPage from './HistoryPage';
 import { analyzeTranscript, generateAltTranscript, translateVideoAnalysis, Segment, VideoAnalysis } from './services/geminiService';
 import { syncVideoToKnowledgeBase } from './services/knowledgeService';
+import { indexVideoData, searchUnifiedIndex, getFallbackResults, getSearchSuggestions, SearchIndexEntry } from './services/searchService';
 import { db, auth, handleFirestoreError, OperationType } from './firebase';
 import { 
   collection, 
@@ -366,12 +367,15 @@ export default function App() {
   const [forceIndex, setForceIndex] = useState(false);
   const [channelUrl, setChannelUrl] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const [isRebuildingIndex, setIsRebuildingIndex] = useState(false);
   const [copied, setCopied] = useState(false);
   const [progress, setProgress] = useState(0);
   const [stopRequested, setStopRequested] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [isFetchingChannel, setIsFetchingChannel] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [suggestions, setSuggestions] = useState<string[]>([]);
   const [videos, setVideos] = useState<IndexedVideo[]>([]);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchOnlyScriptures, setSearchOnlyScriptures] = useState(false);
@@ -503,6 +507,18 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      if (searchQuery.length >= 3) {
+        const results = await getSearchSuggestions(searchQuery);
+        setSuggestions(results);
+      } else {
+        setSuggestions([]);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
   const signIn = async () => {
     const provider = new GoogleAuthProvider();
     try {
@@ -560,60 +576,47 @@ export default function App() {
       return;
     }
     
-    const queryStr = effectiveQuery.toLowerCase();
-    const results: SearchResult[] = [];
-
-    // Search through videos and their metadata
-    videos.forEach(video => {
-      const scriptureMatches = video.all_scripture_references?.filter(ref => 
-        ref.reference.toLowerCase().includes(queryStr) || 
-        ref.evidence_text.toLowerCase().includes(queryStr) ||
-        ref.explanation.toLowerCase().includes(queryStr)
-      ) || [];
-
-      const hasScriptureMatch = scriptureMatches.length > 0;
-
-      if (searchOnlyScriptures) {
-        if (hasScriptureMatch) {
-          results.push({
-            topic: video.title,
-            start_time: 0,
-            end_time: 0,
-            summary: video.executive_summary,
-            video_title: video.title,
-            youtube_id: video.youtube_id,
-            video_url: video.url,
-            scripture_references: scriptureMatches,
-            speaker_name: video.speaker_name,
-            channel_name: video.channel_name
-          });
-        }
-      } else if (
-        video.title.toLowerCase().includes(queryStr) ||
-        video.executive_summary.toLowerCase().includes(queryStr) ||
-        video.themes_and_topics.overarching_message.toLowerCase().includes(queryStr) ||
-        video.themes_and_topics.categories.some(t => t.toLowerCase().includes(queryStr)) ||
-        video.keywords.some(k => k.toLowerCase().includes(queryStr)) ||
-        hasScriptureMatch
-      ) {
-        // Add as a "virtual" segment if no specific segments match
-        results.push({
-          topic: video.title,
-          start_time: 0,
-          end_time: 0,
-          summary: video.executive_summary,
-          video_title: video.title,
-          youtube_id: video.youtube_id,
-          video_url: video.url,
-          scripture_references: video.all_scripture_references || [],
-          speaker_name: video.speaker_name,
-          channel_name: video.channel_name
-        });
+    setIsSearching(true);
+    try {
+      const results = await searchUnifiedIndex(effectiveQuery, user?.uid);
+      
+      if (results.length === 0) {
+        // Fallback logic
+        const fallback = await getFallbackResults();
+        setSearchResults(fallback as any);
+        setStatus("No exact match found. Showing related content:");
+      } else {
+        setSearchResults(results as any);
+        setStatus("");
       }
-    });
+    } catch (err) {
+      console.error("Search error:", err);
+      setError("Failed to perform search. Please try again.");
+    } finally {
+      setIsSearching(false);
+      setSelectedVideo(null);
+    }
+  };
 
-    setSearchResults(results);
-    setSelectedVideo(null);
+  const rebuildIndex = async () => {
+    if (!user) return;
+    setIsRebuildingIndex(true);
+    setStatus("Rebuilding search index...");
+    let count = 0;
+    try {
+      for (const video of videos) {
+        setStatus(`Indexing ${video.title} (${count + 1}/${videos.length})...`);
+        await indexVideoData(video, video.id, user.uid);
+        count++;
+      }
+      setStatus(`Successfully indexed ${count} videos.`);
+    } catch (err) {
+      console.error("Rebuild index error:", err);
+      setError("Failed to rebuild index.");
+    } finally {
+      setIsRebuildingIndex(false);
+      setTimeout(() => setStatus(""), 5000);
+    }
   };
 
   const processSingleVideo = async (videoUrl: string, videoTitle?: string, videoMeta?: any, batchProgress?: number, providedTranscript?: string) => {
@@ -788,6 +791,13 @@ export default function App() {
           await syncVideoToKnowledgeBase(analysis, videoRef.id, user.uid);
         } catch (syncErr) {
           console.error("Failed to sync to knowledge base:", syncErr);
+        }
+
+        // Index for Search
+        try {
+          await indexVideoData(videoData, videoRef.id, user.uid);
+        } catch (indexErr) {
+          console.error("Failed to index for search:", indexErr);
         }
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, 'videos');
@@ -1249,6 +1259,23 @@ export default function App() {
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                   />
+                  {suggestions.length > 0 && (
+                    <ul className="absolute z-50 w-full bg-white border border-[#141414]/10 rounded-xl mt-1 shadow-lg overflow-hidden">
+                      {suggestions.map((s, i) => (
+                        <li 
+                          key={i} 
+                          className="px-4 py-2 text-sm text-[#141414]/80 hover:bg-[#141414]/5 cursor-pointer"
+                          onClick={() => {
+                            setSearchQuery(s);
+                            setSuggestions([]);
+                            handleSearch(undefined, s);
+                          }}
+                        >
+                          {s}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </form>
                 <button
                   onClick={() => {
@@ -1325,6 +1352,7 @@ export default function App() {
           <KnowledgePage 
             onBack={() => navigate('/')} 
             initialSelection={knowledgeBaseSelection} 
+            user={user}
           />
         ) : currentPage === 'history' ? (
           <div className="w-full">
@@ -1345,6 +1373,8 @@ export default function App() {
               deleteVideo={(id: string) => setVideoToDelete(id)} 
               setExportTarget={setExportTarget} 
               setShowExportModal={setShowExportModal}
+              rebuildIndex={rebuildIndex}
+              isRebuildingIndex={isRebuildingIndex}
               t={t}
             />
           </div>
@@ -1954,6 +1984,8 @@ export default function App() {
                     deleteVideo={deleteVideo} 
                     setExportTarget={setExportTarget} 
                     setShowExportModal={setShowExportModal}
+                    rebuildIndex={rebuildIndex}
+                    isRebuildingIndex={isRebuildingIndex}
                     t={t}
                   />
                 )}
@@ -2061,9 +2093,17 @@ export default function App() {
                   >
                     <div className="flex items-center justify-between">
                       <h2 className="text-2xl font-serif italic">{t.searchResults} "{searchQuery}"</h2>
-                      <span className="text-xs font-medium bg-[#141414]/5 px-3 py-1 rounded-full">
-                        {searchResults.length} {t.searchResults}
-                      </span>
+                      <div className="flex items-center gap-3">
+                        {isSearching && (
+                          <div className="flex items-center gap-2 text-xs text-[#141414]/40 font-medium">
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            Searching...
+                          </div>
+                        )}
+                        <span className="text-xs font-medium bg-[#141414]/5 px-3 py-1 rounded-full">
+                          {searchResults.length} {t.searchResults}
+                        </span>
+                      </div>
                     </div>
                     <div className="grid gap-4">
                       {searchResults.map((result, idx) => (
@@ -2285,67 +2325,123 @@ function ScriptureBadge({ reference, onNavigateToKnowledge }: { reference: any, 
   );
 }
 
-function SearchResultCard({ result, formatTime, onViewDetails, onNavigateToKnowledge }: { result: SearchResult, formatTime: (s: number) => string, onViewDetails: (videoUrl: string) => void, onNavigateToKnowledge: (ref: any) => void }) {
+function SearchResultCard({ result, formatTime, onViewDetails, onNavigateToKnowledge }: { result: any, formatTime: (s: number) => string, onViewDetails: (videoUrl: string) => void, onNavigateToKnowledge: (ref: any) => void }) {
+  const isIndexEntry = 'type' in result;
+  const type = isIndexEntry ? result.type : 'video_segment';
+  const text = isIndexEntry ? result.text : result.summary;
+  const title = isIndexEntry ? result.video_title : result.video_title;
+  const timestamp = isIndexEntry ? result.timestamp : result.start_time;
+  const youtubeId = isIndexEntry ? result.youtube_id : result.youtube_id;
+  const topics = isIndexEntry ? result.topics : [];
+
   return (
-    <div className="bg-white p-6 rounded-2xl border border-[#141414]/5 shadow-sm hover:shadow-md transition-all group">
-      <div className="flex items-start justify-between mb-4">
-        <div>
-          <h3 className="text-lg font-medium group-hover:text-[#141414] transition-colors">{result.topic}</h3>
-          <p className="text-xs text-[#141414]/40 flex items-center gap-1 mt-1">
-            <Video className="w-3 h-3" />
-            <span>{result.video_title}</span>
-            {result.speaker_name && (
-              <>
-                <span className="mx-1">•</span>
-                <User className="w-3 h-3" />
-                <span>{result.speaker_name}</span>
-              </>
-            )}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button 
-            onClick={() => onViewDetails(result.video_url)}
-            className="p-2 rounded-full bg-[#141414]/5 text-[#141414]/40 hover:bg-[#141414] hover:text-white transition-all"
-            title="View Full Analysis"
-          >
-            <FileText className="w-4 h-4" />
-          </button>
-          <a
-            href={`${getCleanYoutubeUrl(result.video_url)}&t=${Math.floor(result.start_time)}s`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="bg-[#141414]/5 p-2 rounded-full hover:bg-[#141414] hover:text-white transition-all"
-            title="Watch on YouTube"
-          >
-            <Play className="w-4 h-4 fill-current" />
-          </a>
-        </div>
-      </div>
-      <p className="text-sm text-[#141414]/70 mb-4 leading-relaxed">
-        {result.summary}
-      </p>
-      <div className="flex items-center gap-4 text-xs font-mono text-[#141414]/40">
-        <div className="flex items-center gap-1">
-          <Clock className="w-3 h-3" />
-          <span>{formatTime(result.start_time)} - {formatTime(result.end_time)}</span>
-        </div>
-      </div>
-      {result.scripture_references && result.scripture_references.length > 0 && (
-        <div className="space-y-2 mt-4 pt-4 border-t border-[#141414]/5">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/30">Scripture References</p>
-          <div className="grid grid-cols-1 gap-2">
-            {result.scripture_references.map((ref, i) => (
-              <ScriptureBadge 
-                key={i} 
-                reference={ref} 
-                onNavigateToKnowledge={onNavigateToKnowledge}
+    <motion.div 
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="bg-white p-6 rounded-3xl border border-[#141414]/5 hover:border-[#141414]/20 transition-all group shadow-sm hover:shadow-md"
+    >
+      <div className="flex flex-col md:flex-row gap-6">
+        <div className="w-full md:w-48 shrink-0">
+          <div className="relative aspect-video rounded-2xl overflow-hidden bg-[#141414]/5 group/thumb">
+            {youtubeId ? (
+              <img 
+                src={`https://img.youtube.com/vi/${youtubeId}/mqdefault.jpg`}
+                alt={title}
+                className="w-full h-full object-cover transition-transform duration-500 group-hover/thumb:scale-110"
+                referrerPolicy="no-referrer"
               />
-            ))}
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-[#141414]/20">
+                <BookOpen className="w-8 h-8" />
+              </div>
+            )}
+            {youtubeId && (
+              <button 
+                onClick={() => onViewDetails(`https://youtube.com/watch?v=${youtubeId}`)}
+                className="absolute inset-0 flex items-center justify-center bg-[#141414]/40 opacity-0 group-hover/thumb:opacity-100 transition-opacity"
+              >
+                <Play className="w-8 h-8 text-white fill-current" />
+              </button>
+            )}
+            <div className="absolute top-2 left-2">
+              <span className={`text-[8px] font-bold uppercase tracking-widest px-2 py-1 rounded-full backdrop-blur-md ${
+                type === 'scripture' ? 'bg-emerald-500/80 text-white' :
+                type === 'quran' ? 'bg-emerald-700/80 text-white' :
+                type === 'bible' ? 'bg-sky-700/80 text-white' :
+                type === 'knowledge' ? 'bg-purple-700/80 text-white' :
+                type === 'argument' ? 'bg-blue-500/80 text-white' :
+                type === 'summary' ? 'bg-amber-500/80 text-white' :
+                'bg-black/60 text-white'
+              }`}>
+                {type.replace('_', ' ')}
+              </span>
+            </div>
           </div>
         </div>
-      )}
-    </div>
+
+        <div className="flex-1 space-y-3">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-lg font-serif italic text-[#141414] group-hover:text-[#141414] transition-colors line-clamp-1">
+                {type === 'quran' ? `${result.surah_name_en} (${result.surah_number}:${result.ayah_number})` : 
+                 type === 'bible' ? `${result.book} ${result.chapter}:${result.verse}` : 
+                 title}
+              </h3>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/40">
+                  {result.speaker_name || result.speaker || 'Unknown Speaker'}
+                </span>
+                {timestamp > 0 && (
+                  <>
+                    <span className="text-[#141414]/10">•</span>
+                    <button 
+                      onClick={() => onViewDetails(`https://youtube.com/watch?v=${youtubeId}&t=${timestamp}`)}
+                      className="text-[10px] font-mono font-bold text-blue-600 hover:underline"
+                    >
+                      {formatTime(timestamp)}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+            <button 
+              onClick={() => onViewDetails(`https://youtube.com/watch?v=${youtubeId}`)}
+              className="p-2 hover:bg-[#141414]/5 rounded-xl transition-colors shrink-0"
+            >
+              <ExternalLink className="w-4 h-4 text-[#141414]/40" />
+            </button>
+          </div>
+
+          <p className="text-sm text-[#141414]/60 leading-relaxed line-clamp-3 italic">
+            "{type === 'quran' ? result.text_en : 
+              type === 'bible' ? result.text : 
+              text}"
+          </p>
+
+          {topics && topics.length > 0 && (
+            <div className="flex flex-wrap gap-2 pt-1">
+              {topics.slice(0, 3).map((topic: string, i: number) => (
+                <span key={i} className="text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 bg-[#141414]/5 text-[#141414]/40 rounded-full">
+                  {topic}
+                </span>
+              ))}
+            </div>
+          )}
+          
+          {result.scripture_references && result.scripture_references.length > 0 && (
+            <div className="flex flex-wrap gap-2 pt-1">
+              {result.scripture_references.slice(0, 2).map((ref: any, i: number) => (
+                <ScriptureBadge 
+                  key={i} 
+                  reference={ref} 
+                  onNavigateToKnowledge={onNavigateToKnowledge}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </motion.div>
   );
 }
 

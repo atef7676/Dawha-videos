@@ -110,6 +110,21 @@ class QuranService {
       return [];
     }
   }
+
+  getQuranComLink(reference: string, type?: string): string {
+    if (type === 'bible') {
+      return `https://www.biblegateway.com/quicksearch/?quicksearch=${encodeURIComponent(reference)}&version=NIV`;
+    }
+    
+    // Expected format: "Surah Name 2:255" or "2:255"
+    const match = reference.match(/(\d+):(\d+)/);
+    if (match) {
+      const surah = match[1];
+      const ayah = match[2];
+      return `https://quran.com/${surah}/${ayah}`;
+    }
+    return `https://quran.com/search?q=${encodeURIComponent(reference)}`;
+  }
 }
 
 export const quranService = new QuranService();
