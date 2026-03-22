@@ -379,6 +379,8 @@ export default function App() {
   const [videoSegments, setVideoSegments] = useState<Segment[]>([]);
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [skippedVideos, setSkippedVideos] = useState<any[]>([]);
+  const [batchSummary, setBatchSummary] = useState<{ success: number; fail: number; skipped: number } | null>(null);
   const [activeTab, setActiveTab] = useState<'single' | 'channel' | 'history' | 'knowledge'>('single');
   const [videoToDelete, setVideoToDelete] = useState<string | null>(null);
   const [showManualInput, setShowManualInput] = useState(false);
@@ -868,6 +870,45 @@ export default function App() {
     }
   };
 
+  const reindexVideo = async (video: any) => {
+    if (!user) return;
+    try {
+      setIsProcessing(true);
+      setStatus(`Re-indexing ${video.title}...`);
+      
+      // We temporarily bypass the check by setting forceIndex to true
+      const youtubeId = extractYoutubeId(video.url);
+      const q = query(collection(db, 'videos'), where('userId', '==', user.uid), where('youtube_id', '==', youtubeId));
+      const snapshot = await getDocs(q);
+      
+      // Delete existing records if any (mimicking forceIndex behavior)
+      for (const doc of snapshot.docs) {
+        const segmentsSnapshot = await getDocs(collection(db, `videos/${doc.id}/segments`));
+        for (const segmentDoc of segmentsSnapshot.docs) {
+          await deleteDoc(segmentDoc.ref);
+        }
+        await deleteDoc(doc.ref);
+      }
+
+      await processSingleVideo(video.url, video.title, video);
+      
+      // Remove from skipped list
+      setSkippedVideos(prev => prev.filter(v => v.url !== video.url));
+      setBatchSummary(prev => prev ? { 
+        ...prev, 
+        success: prev.success + 1, 
+        skipped: Math.max(0, prev.skipped - 1) 
+      } : null);
+      
+      setStatus(`Successfully re-indexed ${video.title}`);
+    } catch (err: any) {
+      setError(err.message || 'Failed to re-index video');
+    } finally {
+      setIsProcessing(false);
+      setTimeout(() => setStatus(''), 5000);
+    }
+  };
+
   const processBatch = async () => {
     if (selectedChannelVideos.length === 0) return;
 
@@ -876,8 +917,12 @@ export default function App() {
     setStopRequested(false);
     setIsStopping(false);
     setError(null);
+    setSkippedVideos([]);
+    setBatchSummary(null);
     let successCount = 0;
     let failCount = 0;
+    let skippedCount = 0;
+    const skipped: any[] = [];
 
     try {
       const total = selectedChannelVideos.length;
@@ -892,7 +937,8 @@ export default function App() {
         
         if (await checkVideoProcessed(youtubeId)) {
           console.log(`Skipping ${videoUrl}, already processed.`);
-          successCount++;
+          skippedCount++;
+          if (video) skipped.push(video);
           continue;
         }
         try {
@@ -905,7 +951,9 @@ export default function App() {
         }
       }
       setProgress(100);
-      setStatus(`Batch complete: ${successCount} succeeded, ${failCount} failed.`);
+      setSkippedVideos(skipped);
+      setBatchSummary({ success: successCount, fail: failCount, skipped: skippedCount });
+      setStatus(`Batch complete: ${successCount} succeeded, ${failCount} failed, ${skippedCount} skipped.`);
       setChannelVideos([]);
       setSelectedChannelVideos([]);
     } catch (err: any) {
@@ -1847,6 +1895,54 @@ export default function App() {
                             )}
                           </button>
                         </div>
+
+                        {batchSummary && (
+                          <div className="mt-6 p-6 bg-[#141414]/[0.02] rounded-3xl border border-[#141414]/5 space-y-4">
+                            <div className="flex items-center justify-between">
+                              <h4 className="text-[10px] font-bold uppercase tracking-widest text-[#141414]">Batch Summary</h4>
+                              <button 
+                                onClick={() => setBatchSummary(null)}
+                                className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/40 hover:text-[#141414]"
+                              >
+                                Clear
+                              </button>
+                            </div>
+                            <div className="grid grid-cols-3 gap-4">
+                              <div className="p-3 bg-white rounded-xl border border-[#141414]/5 text-center">
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-500 mb-1">Success</p>
+                                <p className="text-xl font-serif italic">{batchSummary.success}</p>
+                              </div>
+                              <div className="p-3 bg-white rounded-xl border border-[#141414]/5 text-center">
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-red-500 mb-1">Failed</p>
+                                <p className="text-xl font-serif italic">{batchSummary.fail}</p>
+                              </div>
+                              <div className="p-3 bg-white rounded-xl border border-[#141414]/5 text-center">
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-amber-500 mb-1">Skipped</p>
+                                <p className="text-xl font-serif italic">{batchSummary.skipped}</p>
+                              </div>
+                            </div>
+
+                            {skippedVideos.length > 0 && (
+                              <div className="space-y-3">
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/40">Skipped (Already Indexed)</p>
+                                <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-2">
+                                  {skippedVideos.map((video) => (
+                                    <div key={video.url} className="flex items-center justify-between p-3 bg-white rounded-xl border border-[#141414]/5 group">
+                                      <span className="text-xs truncate flex-1 text-[#141414]/60">{video.title}</span>
+                                      <button
+                                        onClick={() => reindexVideo(video)}
+                                        disabled={isProcessing}
+                                        className="ml-3 px-3 py-1 bg-[#141414] text-white text-[10px] font-bold uppercase tracking-widest rounded-full hover:bg-[#141414]/90 transition-all disabled:opacity-50"
+                                      >
+                                        Re-index
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
