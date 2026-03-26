@@ -3,17 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
-import { Search, Plus, Video, Clock, ChevronRight, Loader2, Play, ExternalLink, Database, Download, X, Trash2, LogIn, LogOut, User, BookOpen, ArrowLeft, FileText, Share2, Check } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Search, Plus, Video, Clock, ChevronRight, Loader2, Play, ExternalLink, Database, Download, X, Trash2, LogIn, LogOut, User, BookOpen, ArrowLeft, FileText } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Helmet } from 'react-helmet-async';
-import { useNavigate, useLocation, useParams, useSearchParams } from 'react-router-dom';
-import KnowledgePage from './components/KnowledgePage';
-import { quranService } from './services/quranService';
 import HistoryPage from './HistoryPage';
 import { analyzeTranscript, generateAltTranscript, translateVideoAnalysis, Segment, VideoAnalysis } from './services/geminiService';
-import { syncVideoToKnowledgeBase } from './services/knowledgeService';
-import { indexVideoData, searchUnifiedIndex, getFallbackResults, getSearchSuggestions, SearchIndexEntry } from './services/searchService';
 import { db, auth, handleFirestoreError, OperationType } from './firebase';
 import { 
   collection, 
@@ -61,8 +55,6 @@ interface IndexedVideo {
   userId: string;
   transcript?: string;
   channel_url?: string;
-  official_description?: string;
-  upload_date?: string;
   minute_by_minute?: { timestamp: string; content: string }[];
   theological_topics?: string[];
   scripture_references?: import('./services/geminiService').ScriptureReference[];
@@ -79,76 +71,6 @@ interface SearchResult extends Segment {
   speaker_name?: string;
   channel_name?: string;
 }
-
-const SEO = ({ title, description, image, url, videoData }: { title?: string, description?: string, image?: string, url?: string, videoData?: IndexedVideo }) => {
-  const siteTitle = "Theological Video Indexer";
-  const fullTitle = title ? `${title} | ${siteTitle}` : siteTitle;
-  const siteDescription = "Advanced analysis for Dawah and Interfaith debate. Indexing theological videos with scripture references and logical arguments.";
-  const fullDescription = description || siteDescription;
-  const siteUrl = window.location.origin;
-  const fullUrl = url ? `${siteUrl}${url}` : siteUrl;
-  const fullImage = image || `${siteUrl}/og-image.png`;
-
-  const jsonLd = useMemo(() => {
-    if (videoData) {
-      return {
-        "@context": "https://schema.org",
-        "@type": "VideoObject",
-        "name": videoData.title,
-        "description": videoData.executive_summary,
-        "thumbnailUrl": `https://img.youtube.com/vi/${videoData.youtube_id}/maxresdefault.jpg`,
-        "uploadDate": videoData.upload_date || videoData.created_at?.toDate()?.toISOString(),
-        "contentUrl": videoData.url,
-        "embedUrl": `https://www.youtube.com/embed/${videoData.youtube_id}`,
-        "interactionStatistic": {
-          "@type": "InteractionCounter",
-          "interactionType": { "@type": "WatchAction" }
-        }
-      };
-    }
-    return {
-      "@context": "https://schema.org",
-      "@type": "WebSite",
-      "name": siteTitle,
-      "url": siteUrl,
-      "description": siteDescription
-    };
-  }, [videoData, siteUrl]);
-
-  return (
-    <Helmet>
-      <title>{fullTitle}</title>
-      <meta name="description" content={fullDescription} />
-      <link rel="canonical" href={fullUrl} />
-
-      {/* Open Graph / Facebook */}
-      <meta property="og:type" content={videoData ? "video.other" : "website"} />
-      <meta property="og:url" content={fullUrl} />
-      <meta property="og:title" content={fullTitle} />
-      <meta property="og:description" content={fullDescription} />
-      <meta property="og:image" content={fullImage} />
-
-      {/* Twitter */}
-      <meta property="twitter:card" content="summary_large_image" />
-      <meta property="twitter:url" content={fullUrl} />
-      <meta property="twitter:title" content={fullTitle} />
-      <meta property="twitter:description" content={fullDescription} />
-      <meta property="twitter:image" content={fullImage} />
-
-      {/* Additional SEO Tags */}
-      <meta name="robots" content="index, follow" />
-      <meta name="theme-color" content="#F5F5F0" />
-      {videoData?.keywords && (
-        <meta name="keywords" content={videoData.keywords.join(', ')} />
-      )}
-
-      {/* Structured Data */}
-      <script type="application/ld+json">
-        {JSON.stringify(jsonLd)}
-      </script>
-    </Helmet>
-  );
-};
 
 const extractYoutubeId = (url: string) => {
   const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
@@ -193,7 +115,6 @@ const translations = {
     login: "Sign in with Google",
     logout: "Sign Out",
     history: "History",
-    knowledgeBase: "Knowledge Base",
     allReferences: "All Scripture References",
     keywords: "Keywords",
     categories: "Categories",
@@ -264,7 +185,6 @@ const translations = {
     login: "تسجيل الدخول بجوجل",
     logout: "تسجيل الخروج",
     history: "السجل",
-    knowledgeBase: "قاعدة المعرفة",
     allReferences: "جميع المراجع الدينية",
     keywords: "الكلمات المفتاحية",
     categories: "التصنيفات",
@@ -362,20 +282,14 @@ export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [url, setUrl] = useState('');
-  const [transcriptInput, setTranscriptInput] = useState('');
-  const [useAiFallback, setUseAiFallback] = useState(false);
   const [forceIndex, setForceIndex] = useState(false);
   const [channelUrl, setChannelUrl] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [isSearching, setIsSearching] = useState(false);
-  const [isRebuildingIndex, setIsRebuildingIndex] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [progress, setProgress] = useState(0);
   const [stopRequested, setStopRequested] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [isFetchingChannel, setIsFetchingChannel] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [suggestions, setSuggestions] = useState<string[]>([]);
   const [videos, setVideos] = useState<IndexedVideo[]>([]);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchOnlyScriptures, setSearchOnlyScriptures] = useState(false);
@@ -383,43 +297,8 @@ export default function App() {
   const [videoSegments, setVideoSegments] = useState<Segment[]>([]);
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [skippedVideos, setSkippedVideos] = useState<any[]>([]);
-  const [batchSummary, setBatchSummary] = useState<{ success: number; fail: number; skipped: number } | null>(null);
-  const [activeTab, setActiveTab] = useState<'single' | 'channel' | 'history' | 'knowledge'>('single');
-  const [videoToDelete, setVideoToDelete] = useState<string | null>(null);
-  const [showManualInput, setShowManualInput] = useState(false);
-  const [manualTranscript, setManualTranscript] = useState('');
-
-  const handleManualReindex = async () => {
-    if (!selectedVideo || !manualTranscript) return;
-    
-    try {
-      setIsProcessing(true);
-      setStatus('Re-analyzing with manual transcript...');
-      setProgress(10);
-      
-      // Use existing processSingleVideo with the provided transcript
-      // We set forceIndex to true to replace the existing one
-      const oldForceIndex = forceIndex;
-      setForceIndex(true);
-      
-      await processSingleVideo(selectedVideo.url, selectedVideo.title, null, 0, manualTranscript);
-      
-      setForceIndex(oldForceIndex);
-      setShowManualInput(false);
-      setManualTranscript('');
-      setSelectedVideo(null); // Go back to library to see the new one
-      setStatus('Re-analysis complete!');
-    } catch (err: any) {
-      console.error('Manual re-index error:', err);
-      setError(err.message || 'Failed to re-analyze video');
-    } finally {
-      setIsProcessing(false);
-      setProgress(0);
-    }
-  };
-  const [knowledgeBaseSelection, setKnowledgeBaseSelection] = useState<any>(null);
-  const [currentPage, setCurrentPage] = useState<'main' | 'history' | 'knowledge'>('main');
+  const [activeTab, setActiveTab] = useState<'single' | 'channel' | 'history'>('single');
+  const [currentPage, setCurrentPage] = useState<'main' | 'history'>('main');
   const [channelVideos, setChannelVideos] = useState<any[]>([]);
   const [channelPage, setChannelPage] = useState(1);
   const [selectedChannelVideos, setSelectedChannelVideos] = useState<string[]>([]);
@@ -428,57 +307,6 @@ export default function App() {
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportTarget, setExportTarget] = useState<IndexedVideo | IndexedVideo[] | null>(null);
   const [showTranscript, setShowTranscript] = useState(false);
-  const [currentProcessingTranscript, setCurrentProcessingTranscript] = useState<string>('');
-
-  const navigate = useNavigate();
-  const location = useLocation();
-  const [searchParams] = useSearchParams();
-
-  // Sync state with URL on mount and location change
-  useEffect(() => {
-    const path = location.pathname;
-    if (path === '/knowledge') {
-      setCurrentPage('knowledge');
-      setSelectedVideo(null);
-    } else if (path === '/history') {
-      setCurrentPage('history');
-      setSelectedVideo(null);
-    } else if (path.startsWith('/video/')) {
-      const videoId = path.split('/')[2];
-      const video = videos.find(v => v.id === videoId);
-      if (video) {
-        setSelectedVideo(video);
-        setCurrentPage('main');
-      }
-    } else {
-      setCurrentPage('main');
-      setSelectedVideo(null);
-    }
-
-    const q = searchParams.get('q');
-    if (q) {
-      setSearchQuery(q);
-      // Trigger search if not already done
-      if (searchResults.length === 0 && videos.length > 0) {
-        handleSearch(undefined, q);
-      }
-    }
-  }, [location.pathname, searchParams, videos]);
-
-  const handleShare = () => {
-    const url = window.location.href;
-    if (navigator.share) {
-      navigator.share({
-        title: selectedVideo?.title || t.title,
-        text: selectedVideo?.executive_summary || t.subtitle,
-        url: url,
-      }).catch(console.error);
-    } else {
-      navigator.clipboard.writeText(url);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -489,8 +317,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!user) {
+      setVideos([]);
+      return;
+    }
+
     const q = query(
       collection(db, 'videos'),
+      where('userId', '==', user.uid),
       orderBy('createdAt', 'desc')
     );
 
@@ -505,19 +339,7 @@ export default function App() {
     });
 
     return () => unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    const timer = setTimeout(async () => {
-      if (searchQuery.length >= 3) {
-        const results = await getSearchSuggestions(searchQuery);
-        setSuggestions(results);
-      } else {
-        setSuggestions([]);
-      }
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
+  }, [user]);
 
   const signIn = async () => {
     const provider = new GoogleAuthProvider();
@@ -554,72 +376,71 @@ export default function App() {
     }
   }, [isAuthReady]);
 
-  const handleSearch = async (e?: React.FormEvent, overrideQuery?: string) => {
-    if (e) e.preventDefault();
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
     setError(null);
-    const effectiveQuery = overrideQuery !== undefined ? overrideQuery : searchQuery;
-    
-    // Update URL if needed
-    const params = new URLSearchParams(location.search);
-    const currentQ = params.get('q') || '';
-    if (effectiveQuery.trim() !== currentQ) {
-      if (effectiveQuery.trim()) {
-        params.set('q', effectiveQuery);
-      } else {
-        params.delete('q');
-      }
-      navigate(`${location.pathname}?${params.toString()}`, { replace: true });
-    }
-
-    if (!effectiveQuery.trim()) {
+    if (!searchQuery.trim()) {
       setSearchResults([]);
       return;
     }
     
-    setIsSearching(true);
-    try {
-      const results = await searchUnifiedIndex(effectiveQuery, user?.uid);
-      
-      if (results.length === 0) {
-        // Fallback logic
-        const fallback = await getFallbackResults();
-        setSearchResults(fallback as any);
-        setStatus("No exact match found. Showing related content:");
-      } else {
-        setSearchResults(results as any);
-        setStatus("");
+    const query = searchQuery.toLowerCase();
+    const results: SearchResult[] = [];
+
+    // Search through videos and their metadata
+    videos.forEach(video => {
+      const scriptureMatches = video.all_scripture_references?.filter(ref => 
+        ref.reference.toLowerCase().includes(query) || 
+        ref.evidence_text.toLowerCase().includes(query) ||
+        ref.explanation.toLowerCase().includes(query)
+      ) || [];
+
+      const hasScriptureMatch = scriptureMatches.length > 0;
+
+      if (searchOnlyScriptures) {
+        if (hasScriptureMatch) {
+          results.push({
+            topic: video.title,
+            start_time: 0,
+            end_time: 0,
+            summary: video.executive_summary,
+            video_title: video.title,
+            youtube_id: video.youtube_id,
+            video_url: video.url,
+            scripture_references: scriptureMatches,
+            speaker_name: video.speaker_name,
+            channel_name: video.channel_name
+          });
+        }
+      } else if (
+        video.title.toLowerCase().includes(query) ||
+        video.executive_summary.toLowerCase().includes(query) ||
+        video.themes_and_topics.overarching_message.toLowerCase().includes(query) ||
+        video.themes_and_topics.categories.some(t => t.toLowerCase().includes(query)) ||
+        video.keywords.some(k => k.toLowerCase().includes(query)) ||
+        hasScriptureMatch
+      ) {
+        // Add as a "virtual" segment if no specific segments match
+        results.push({
+          topic: video.title,
+          start_time: 0,
+          end_time: 0,
+          summary: video.executive_summary,
+          video_title: video.title,
+          youtube_id: video.youtube_id,
+          video_url: video.url,
+          scripture_references: video.all_scripture_references || [],
+          speaker_name: video.speaker_name,
+          channel_name: video.channel_name
+        });
       }
-    } catch (err) {
-      console.error("Search error:", err);
-      setError("Failed to perform search. Please try again.");
-    } finally {
-      setIsSearching(false);
-      setSelectedVideo(null);
-    }
+    });
+
+    setSearchResults(results);
+    setSelectedVideo(null);
   };
 
-  const rebuildIndex = async () => {
-    if (!user) return;
-    setIsRebuildingIndex(true);
-    setStatus("Rebuilding search index...");
-    let count = 0;
-    try {
-      for (const video of videos) {
-        setStatus(`Indexing ${video.title} (${count + 1}/${videos.length})...`);
-        await indexVideoData(video, video.id, user.uid);
-        count++;
-      }
-      setStatus(`Successfully indexed ${count} videos.`);
-    } catch (err) {
-      console.error("Rebuild index error:", err);
-      setError("Failed to rebuild index.");
-    } finally {
-      setIsRebuildingIndex(false);
-      setTimeout(() => setStatus(""), 5000);
-    }
-  };
-
-  const processSingleVideo = async (videoUrl: string, videoTitle?: string, videoMeta?: any, batchProgress?: number, providedTranscript?: string) => {
+  const processSingleVideo = async (videoUrl: string, videoTitle?: string, videoMeta?: any, batchProgress?: number) => {
     if (!user) {
       setError('Please sign in to index videos.');
       return;
@@ -628,7 +449,6 @@ export default function App() {
     
     setStatus(`Processing ${videoTitle || videoUrl}...`);
     if (!batchProgress) setProgress(5);
-    setCurrentProcessingTranscript('');
 
     try {
       const youtubeId = extractYoutubeId(videoUrl);
@@ -647,90 +467,56 @@ export default function App() {
       if (stopRequested) throw new Error('StoppedByUser');
       if (!batchProgress) setProgress(15);
 
-      let finalTranscriptText = '';
-      let videoTitleToUse = videoTitle || `Video ${youtubeId}`;
-      let fallback = false;
-
-      if (providedTranscript) {
-        finalTranscriptText = providedTranscript;
-        videoTitleToUse = videoTitle || `Video ${youtubeId}`;
-        setStatus(`Using manually provided transcript for ${videoTitleToUse}...`);
-      } else if (useAiFallback) {
-        fallback = true;
-        videoTitleToUse = videoTitle || `Video ${youtubeId}`;
-        setStatus(`Skipping YouTube transcript fetch as requested. Using AI fallback for ${videoTitleToUse}...`);
-      } else {
-        const transcriptRes = await fetch('/api/transcript', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: videoUrl }),
-        });
-        
-        if (!transcriptRes.ok) {
-          const errorData = await transcriptRes.json();
-          throw new Error(errorData.error || 'Failed to fetch transcript');
-        }
-        const { transcript, title, description, uploadedAt, fallback: isFallback, message } = await transcriptRes.json();
-        videoTitleToUse = title || videoTitleToUse;
-        fallback = isFallback;
-        
-        // Store these in videoMeta if they exist
-        if (description) videoMeta = { ...videoMeta, description };
-        if (uploadedAt) videoMeta = { ...videoMeta, uploadedAt };
-        
-        if (isFallback) {
-          finalTranscriptText = ''; // Will be generated by generateAltTranscript
-          if (message) setStatus(message);
-        } else {
-          finalTranscriptText = transcript.map((t: any) => `[${t.offset}s] ${t.text}`).join(' ');
-        }
-      }
+      const transcriptRes = await fetch('/api/transcript', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: videoUrl }),
+      });
       
-      setCurrentProcessingTranscript(finalTranscriptText);
+      if (!transcriptRes.ok) {
+        const errorData = await transcriptRes.json();
+        throw new Error(errorData.error || 'Failed to fetch transcript');
+      }
+      const { transcript, title, fallback } = await transcriptRes.json();
       
       if (stopRequested) throw new Error('StoppedByUser');
       if (!batchProgress) setProgress(30);
 
       let analysis: VideoAnalysis;
       let fullTranscriptText = '';
-      if (fallback && !providedTranscript) {
-        setStatus(`Generating AI alternative for ${videoTitleToUse}...`);
-        analysis = await generateAltTranscript(videoUrl, videoTitleToUse, (p) => {
-          if (!batchProgress) setProgress(p);
-        });
+      if (fallback) {
+        setStatus(`Generating AI alternative for ${title}...`);
+        analysis = await generateAltTranscript(videoUrl, title);
         fullTranscriptText = analysis.transcription || analysis.executive_summary;
       } else {
-        setStatus(`Analyzing ${videoTitleToUse} with AI...`);
-        analysis = await analyzeTranscript(finalTranscriptText, videoUrl, videoTitleToUse, (p) => {
-          if (!batchProgress) setProgress(p);
-        });
-        fullTranscriptText = analysis.transcription || finalTranscriptText;
+        setStatus(`Analyzing ${title} with AI...`);
+        const rawTranscriptText = transcript.map((t: any) => `[${t.offset}s] ${t.text}`).join(' ');
+        analysis = await analyzeTranscript(rawTranscriptText, videoUrl, title);
+        fullTranscriptText = analysis.transcription || rawTranscriptText;
       }
 
       if (stopRequested) throw new Error('StoppedByUser');
       if (!batchProgress) setProgress(70);
 
-      setStatus(`Saving ${videoTitleToUse} to database...`);
+      setStatus(`Saving ${title} to database...`);
       
       const videoData = {
         youtube_id: youtubeId,
-        title: `${videoTitleToUse} (${new Date().toLocaleString()})`,
+        title: `${title || videoTitle || `Video ${youtubeId}`} (${new Date().toLocaleString()})`,
         url: videoUrl,
-        executive_summary: analysis.executive_summary || '',
-        linkable_timestamps: analysis.linkable_timestamps || [],
-        themes_and_topics: analysis.themes_and_topics || { overarching_message: '', categories: [] },
-        key_points: analysis.key_points || [],
-        keywords: analysis.keywords || [],
+        executive_summary: analysis.executive_summary,
+        linkable_timestamps: analysis.linkable_timestamps,
+        themes_and_topics: analysis.themes_and_topics,
+        key_points: analysis.key_points,
+        keywords: analysis.keywords,
         speaker_name: analysis.speaker_name || videoMeta?.author?.name || 'Unknown',
         channel_name: analysis.channel_name || videoMeta?.author?.name || 'Unknown',
         video_timestamp: videoMeta?.duration || 'Unknown',
         token_count: estimateTokens(videoUrl),
         userId: user.uid,
         createdAt: serverTimestamp(),
-        transcript: fullTranscriptText || '',
+        transcript: fullTranscriptText,
         channel_url: videoMeta?.author?.url || '',
-        official_description: videoMeta?.description || '',
-        upload_date: videoMeta?.uploadedAt || '',
         minute_by_minute: analysis.minute_by_minute || [],
         theological_topics: analysis.theological_topics || [],
         scripture_references: analysis.scripture_references || [],
@@ -743,31 +529,9 @@ export default function App() {
       if (stopRequested) throw new Error('StoppedByUser');
       if (!batchProgress) setProgress(85);
 
-      console.log('Saving video data:', videoData);
-
       try {
         const videoRef = await addDoc(collection(db, 'videos'), videoData);
         
-        // Save references to the global video_references collection
-        const referencesBatch = (analysis.all_scripture_references || []).map(ref => {
-          // Ensure reference_type is valid for security rules
-          const refType = ['quran', 'hadith', 'bible'].includes(ref.reference_type) 
-            ? ref.reference_type 
-            : 'quran'; // Default to quran if unknown, or handle appropriately
-
-          return addDoc(collection(db, 'video_references'), {
-            video_id: videoRef.id,
-            reference_type: refType,
-            reference_key: ref.reference_key || `REF_${Date.now()}`,
-            matched_text: ref.evidence_text || ref.reference || 'Reference',
-            confidence_score: typeof ref.confidence_score === 'number' ? ref.confidence_score : 0.5,
-            topic_tags: ref.topic_tags || [],
-            userId: user.uid,
-            createdAt: serverTimestamp(),
-          });
-        });
-        await Promise.all(referencesBatch);
-
         // Save linkable timestamps as segments for search compatibility
         const segmentsBatch = analysis.linkable_timestamps.map(ts => {
           const parts = ts.time.split(':');
@@ -785,20 +549,6 @@ export default function App() {
           });
         });
         await Promise.all(segmentsBatch);
-
-        // Sync to Knowledge Base
-        try {
-          await syncVideoToKnowledgeBase(analysis, videoRef.id, user.uid);
-        } catch (syncErr) {
-          console.error("Failed to sync to knowledge base:", syncErr);
-        }
-
-        // Index for Search
-        try {
-          await indexVideoData(videoData, videoRef.id, user.uid);
-        } catch (indexErr) {
-          console.error("Failed to index for search:", indexErr);
-        }
       } catch (err) {
         handleFirestoreError(err, OperationType.CREATE, 'videos');
       }
@@ -842,11 +592,9 @@ export default function App() {
         videoMeta = await metaRes.json();
       }
 
-      await processSingleVideo(url, undefined, videoMeta, undefined, transcriptInput);
+      await processSingleVideo(url, undefined, videoMeta);
       setStatus('Done!');
       setUrl('');
-      setTranscriptInput('');
-      setCurrentProcessingTranscript('');
       setForceIndex(false);
     } catch (err: any) {
       if (err.message === 'StoppedByUser') {
@@ -880,45 +628,6 @@ export default function App() {
     }
   };
 
-  const reindexVideo = async (video: any) => {
-    if (!user) return;
-    try {
-      setIsProcessing(true);
-      setStatus(`Re-indexing ${video.title}...`);
-      
-      // We temporarily bypass the check by setting forceIndex to true
-      const youtubeId = extractYoutubeId(video.url);
-      const q = query(collection(db, 'videos'), where('userId', '==', user.uid), where('youtube_id', '==', youtubeId));
-      const snapshot = await getDocs(q);
-      
-      // Delete existing records if any (mimicking forceIndex behavior)
-      for (const doc of snapshot.docs) {
-        const segmentsSnapshot = await getDocs(collection(db, `videos/${doc.id}/segments`));
-        for (const segmentDoc of segmentsSnapshot.docs) {
-          await deleteDoc(segmentDoc.ref);
-        }
-        await deleteDoc(doc.ref);
-      }
-
-      await processSingleVideo(video.url, video.title, video);
-      
-      // Remove from skipped list
-      setSkippedVideos(prev => prev.filter(v => v.url !== video.url));
-      setBatchSummary(prev => prev ? { 
-        ...prev, 
-        success: prev.success + 1, 
-        skipped: Math.max(0, prev.skipped - 1) 
-      } : null);
-      
-      setStatus(`Successfully re-indexed ${video.title}`);
-    } catch (err: any) {
-      setError(err.message || 'Failed to re-index video');
-    } finally {
-      setIsProcessing(false);
-      setTimeout(() => setStatus(''), 5000);
-    }
-  };
-
   const processBatch = async () => {
     if (selectedChannelVideos.length === 0) return;
 
@@ -927,12 +636,8 @@ export default function App() {
     setStopRequested(false);
     setIsStopping(false);
     setError(null);
-    setSkippedVideos([]);
-    setBatchSummary(null);
     let successCount = 0;
     let failCount = 0;
-    let skippedCount = 0;
-    const skipped: any[] = [];
 
     try {
       const total = selectedChannelVideos.length;
@@ -947,8 +652,7 @@ export default function App() {
         
         if (await checkVideoProcessed(youtubeId)) {
           console.log(`Skipping ${videoUrl}, already processed.`);
-          skippedCount++;
-          if (video) skipped.push(video);
+          successCount++;
           continue;
         }
         try {
@@ -961,9 +665,7 @@ export default function App() {
         }
       }
       setProgress(100);
-      setSkippedVideos(skipped);
-      setBatchSummary({ success: successCount, fail: failCount, skipped: skippedCount });
-      setStatus(`Batch complete: ${successCount} succeeded, ${failCount} failed, ${skippedCount} skipped.`);
+      setStatus(`Batch complete: ${successCount} succeeded, ${failCount} failed.`);
       setChannelVideos([]);
       setSelectedChannelVideos([]);
     } catch (err: any) {
@@ -1030,13 +732,13 @@ export default function App() {
   };
 
   const deleteVideo = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this video?')) return;
     try {
       await deleteDoc(doc(db, 'videos', id));
       if (selectedVideo?.id === id) {
         setSelectedVideo(null);
         setVideoSegments([]);
       }
-      setVideoToDelete(null);
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `videos/${id}`);
     }
@@ -1149,12 +851,6 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <SEO 
-        title={selectedVideo?.title || (currentPage === 'knowledge' ? t.knowledgeBase : currentPage === 'history' ? t.history : undefined)}
-        description={selectedVideo?.executive_summary}
-        videoData={selectedVideo || undefined}
-        url={location.pathname + location.search}
-      />
       <div className="min-h-screen bg-[#F5F5F0] text-[#141414] font-sans" dir={language === 'ar' ? 'rtl' : 'ltr'}>
       
       {/* Progress Overlay */}
@@ -1203,24 +899,6 @@ export default function App() {
                 />
               </div>
             </div>
-
-            {currentProcessingTranscript && (
-              <motion.div 
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                className="mt-4 pt-4 border-t border-[#141414]/5"
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  <h5 className="text-[9px] font-bold uppercase tracking-widest text-[#141414]/40">Live Transcript</h5>
-                </div>
-                <div className="max-h-32 overflow-y-auto pr-1 custom-scrollbar">
-                  <p className="text-[10px] leading-relaxed text-[#141414]/70 font-mono italic">
-                    {currentProcessingTranscript.slice(0, 500)}...
-                  </p>
-                </div>
-              </motion.div>
-            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -1244,10 +922,10 @@ export default function App() {
                 {t.switchLang}
               </button>
               <button 
-                onClick={() => navigate('/history')}
+                onClick={() => setCurrentPage(currentPage === 'main' ? 'history' : 'main')}
                 className="text-sm font-medium text-[#141414]/60 hover:text-[#141414]"
               >
-                {currentPage === 'main' ? t.history : 'Indexer'}
+                {currentPage === 'main' ? t.history : t.title}
               </button>
               <div className="flex items-center gap-2">
                 <form onSubmit={handleSearch} className="relative">
@@ -1259,28 +937,11 @@ export default function App() {
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                   />
-                  {suggestions.length > 0 && (
-                    <ul className="absolute z-50 w-full bg-white border border-[#141414]/10 rounded-xl mt-1 shadow-lg overflow-hidden">
-                      {suggestions.map((s, i) => (
-                        <li 
-                          key={i} 
-                          className="px-4 py-2 text-sm text-[#141414]/80 hover:bg-[#141414]/5 cursor-pointer"
-                          onClick={() => {
-                            setSearchQuery(s);
-                            setSuggestions([]);
-                            handleSearch(undefined, s);
-                          }}
-                        >
-                          {s}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
                 </form>
                 <button
                   onClick={() => {
                     setSearchOnlyScriptures(!searchOnlyScriptures);
-                    handleSearch(undefined, searchQuery);
+                    if (searchQuery) handleSearch({ preventDefault: () => {} } as any);
                   }}
                   className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all border ${
                     searchOnlyScriptures 
@@ -1292,23 +953,6 @@ export default function App() {
                   {t.allReferences}
                 </button>
               </div>
-            </div>
-
-            <div className="flex items-center gap-6">
-              {user && (
-                <button 
-                  onClick={() => navigate('/')}
-                  className={`text-xs font-bold uppercase tracking-widest transition-all ${currentPage === 'main' ? 'text-[#141414]' : 'text-[#141414]/40 hover:text-[#141414]'}`}
-                >
-                  Indexer
-                </button>
-              )}
-              <button 
-                onClick={() => navigate('/knowledge')}
-                className={`text-xs font-bold uppercase tracking-widest transition-all ${currentPage === 'knowledge' ? 'text-[#141414]' : 'text-[#141414]/40 hover:text-[#141414]'}`}
-              >
-                Knowledge Base
-              </button>
             </div>
 
             <div className="h-6 w-px bg-[#141414]/10 hidden sm:block"></div>
@@ -1347,36 +991,23 @@ export default function App() {
         </div>
       </header>
 
-      <main className={`max-w-6xl mx-auto px-6 py-12 ${!selectedVideo && currentPage !== 'knowledge' ? 'grid grid-cols-1 lg:grid-cols-12 gap-12' : 'block'}`}>
-        {currentPage === 'knowledge' ? (
-          <KnowledgePage 
-            onBack={() => navigate('/')} 
-            initialSelection={knowledgeBaseSelection} 
-            user={user}
-          />
-        ) : currentPage === 'history' ? (
-          <div className="w-full">
-            <div className="flex items-center justify-between mb-8">
-              <button 
-                onClick={() => navigate('/')}
-                className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-[#141414]/40 hover:text-[#141414] transition-colors group"
-              >
-                <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
-                Indexer
-              </button>
-              <h2 className="text-2xl font-serif italic">{t.history}</h2>
+      <main className={`max-w-6xl mx-auto px-6 py-12 ${!selectedVideo && user ? 'grid grid-cols-1 lg:grid-cols-12 gap-12' : 'block'}`}>
+        {!user ? (
+          <div className="lg:col-span-12 flex flex-col items-center justify-center py-20 text-center">
+            <div className="bg-[#141414]/5 p-6 rounded-3xl mb-6">
+              <LogIn className="w-12 h-12 text-[#141414]/20" />
             </div>
-            <HistoryPage 
-              videos={videos} 
-              selectedHistoryVideos={selectedHistoryVideos} 
-              toggleHistorySelection={toggleHistorySelection} 
-              deleteVideo={(id: string) => setVideoToDelete(id)} 
-              setExportTarget={setExportTarget} 
-              setShowExportModal={setShowExportModal}
-              rebuildIndex={rebuildIndex}
-              isRebuildingIndex={isRebuildingIndex}
-              t={t}
-            />
+            <h2 className="text-3xl font-serif italic text-[#141414] mb-3">{t.title}</h2>
+            <p className="text-[#141414]/60 max-w-md mb-8">
+              {t.subtitle}
+            </p>
+            <button 
+              onClick={signIn}
+              className="flex items-center gap-3 px-8 py-4 bg-[#141414] text-white rounded-2xl font-bold hover:bg-[#141414]/90 transition-all shadow-lg shadow-[#141414]/10"
+            >
+              <LogIn className="w-5 h-5" />
+              {t.login}
+            </button>
           </div>
         ) : selectedVideo ? (
           <div className="w-full">
@@ -1388,36 +1019,18 @@ export default function App() {
                 exit={{ opacity: 0, y: -10 }}
                 className="space-y-8"
               >
-                <div className="flex items-center justify-between mb-8">
-                  <button 
-                    onClick={() => navigate('/')}
-                    className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-[#141414]/40 hover:text-[#141414] transition-colors group"
-                  >
-                    <ArrowLeft className={`w-4 h-4 group-hover:${language === 'ar' ? 'translate-x-1' : '-translate-x-1'} transition-transform ${language === 'ar' ? 'rotate-180' : ''}`} />
-                    {t.backToLibrary}
-                  </button>
-                  <button 
-                    onClick={handleShare}
-                    className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-[#141414]/40 hover:text-[#141414] transition-colors group"
-                  >
-                    {copied ? <Check className="w-4 h-4 text-emerald-500" /> : <Share2 className="w-4 h-4" />}
-                    {copied ? 'Copied!' : 'Share'}
-                  </button>
-                </div>
+                <button 
+                  onClick={() => setSelectedVideo(null)}
+                  className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-[#141414]/40 hover:text-[#141414] transition-colors mb-8 group"
+                >
+                  <ArrowLeft className={`w-4 h-4 group-hover:${language === 'ar' ? 'translate-x-1' : '-translate-x-1'} transition-transform ${language === 'ar' ? 'rotate-180' : ''}`} />
+                  {t.backToLibrary}
+                </button>
 
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1">
-                    <h2 className="text-4xl font-serif italic mb-2 leading-tight">{selectedVideo.title}</h2>
-                    <div className="text-xs text-blue-600 font-mono mb-4 break-all opacity-60">
-                      {selectedVideo.url}
-                    </div>
+                    <h2 className="text-4xl font-serif italic mb-4 leading-tight">{selectedVideo.title}</h2>
                     <div className="flex flex-wrap gap-6 mb-6 text-[10px] font-bold uppercase tracking-widest text-[#141414]/40">
-                      {selectedVideo.upload_date && (
-                        <div className="flex items-center gap-1.5">
-                          <Clock className="w-3 h-3" />
-                          <span>Uploaded:</span> <span className="text-[#141414]">{selectedVideo.upload_date}</span>
-                        </div>
-                      )}
                       {selectedVideo.speaker_name && (
                         <div className="flex items-center gap-1.5">
                           <User className="w-3 h-3" />
@@ -1444,7 +1057,7 @@ export default function App() {
                           key={i} 
                           onClick={() => {
                             setSearchQuery(topic);
-                            handleSearch(undefined, topic);
+                            handleSearch({ preventDefault: () => {} } as any);
                             setSelectedVideo(null);
                           }}
                           className="text-[10px] uppercase tracking-wider font-bold bg-[#141414]/5 text-[#141414]/60 px-3 py-1.5 rounded-full border border-[#141414]/10 hover:bg-[#141414]/10 hover:text-[#141414] transition-all"
@@ -1461,7 +1074,7 @@ export default function App() {
                           topic={topic} 
                           onClick={() => {
                             setSearchQuery(topic);
-                            handleSearch(undefined, topic);
+                            handleSearch({ preventDefault: () => {} } as any);
                             setSelectedVideo(null);
                           }}
                         />
@@ -1495,62 +1108,14 @@ export default function App() {
                           <span>{t.transcript}</span>
                         </button>
                       )}
-                      <button 
-                        onClick={() => setShowManualInput(!showManualInput)}
-                        className="text-xs font-bold uppercase tracking-widest text-[#141414]/40 hover:text-[#141414] flex items-center gap-1.5 transition-colors"
-                      >
-                        <FileText className="w-3 h-3" />
-                        <span>Manual Re-index</span>
-                      </button>
                     </div>
-
-                    <AnimatePresence>
-                      {showManualInput && (
-                        <motion.div 
-                          initial={{ opacity: 0, height: 0 }}
-                          animate={{ opacity: 1, height: 'auto' }}
-                          exit={{ opacity: 0, height: 0 }}
-                          className="mt-6 p-6 bg-white rounded-2xl border border-[#141414]/5 shadow-sm space-y-4 overflow-hidden"
-                        >
-                          <div className="flex items-center justify-between">
-                            <h4 className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/40">Paste Manual Transcript</h4>
-                            <button onClick={() => setShowManualInput(false)} className="text-[#141414]/20 hover:text-[#141414]">
-                              <X className="w-4 h-4" />
-                            </button>
-                          </div>
-                          <textarea
-                            value={manualTranscript}
-                            onChange={(e) => setManualTranscript(e.target.value)}
-                            placeholder="Paste the full transcript text here to re-analyze the video with this data..."
-                            className="w-full h-48 p-4 bg-[#141414]/[0.02] border border-[#141414]/10 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-[#141414]/5 transition-all resize-none font-mono"
-                          />
-                          <button
-                            onClick={handleManualReindex}
-                            disabled={!manualTranscript || isProcessing}
-                            className="w-full bg-[#141414] text-white py-3 rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-[#141414]/90 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-                          >
-                            {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Database className="w-4 h-4" />}
-                            Re-analyze with Manual Input
-                          </button>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
                   </div>
                 </div>
 
                 {selectedVideo.executive_summary && (
                   <div className="bg-white p-8 rounded-3xl border border-[#141414]/5 shadow-sm">
                     <h3 className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/40 mb-6 pb-2 border-b border-[#141414]/5">{t.executiveSummary}</h3>
-                    <p className="text-sm leading-relaxed text-[#141414]/80 font-medium mb-6">{selectedVideo.executive_summary}</p>
-                    
-                    {selectedVideo.official_description && (
-                      <div className="mt-6 pt-6 border-t border-[#141414]/5">
-                        <h4 className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/30 mb-3">YouTube Description</h4>
-                        <p className="text-xs text-[#141414]/60 whitespace-pre-wrap line-clamp-5 hover:line-clamp-none transition-all cursor-pointer">
-                          {selectedVideo.official_description}
-                        </p>
-                      </div>
-                    )}
+                    <p className="text-sm leading-relaxed text-[#141414]/80 font-medium">{selectedVideo.executive_summary}</p>
                   </div>
                 )}
 
@@ -1564,14 +1129,7 @@ export default function App() {
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {selectedVideo.all_scripture_references.map((ref, i) => (
-                        <ScriptureBadge 
-                          key={i} 
-                          reference={ref} 
-                          onNavigateToKnowledge={(r) => {
-                            setKnowledgeBaseSelection(r);
-                            setCurrentPage('knowledge');
-                          }}
-                        />
+                        <ScriptureBadge key={i} reference={ref} />
                       ))}
                     </div>
                   </div>
@@ -1598,7 +1156,7 @@ export default function App() {
                             key={i} 
                             onClick={() => { 
                               setSearchQuery(keyword); 
-                              handleSearch(undefined, keyword); 
+                              handleSearch({preventDefault: () => {}} as any); 
                               setSelectedVideo(null);
                             }}
                             className="text-xs bg-[#141414]/5 text-[#141414]/60 px-2 py-1 rounded-md hover:bg-[#141414]/10 hover:text-[#141414] transition-colors"
@@ -1684,14 +1242,7 @@ export default function App() {
                               {ts.scripture_references && ts.scripture_references.length > 0 && (
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                   {ts.scripture_references.map((ref: any, i: number) => (
-                                    <ScriptureBadge 
-                                      key={i} 
-                                      reference={ref} 
-                                      onNavigateToKnowledge={(r) => {
-                                        setKnowledgeBaseSelection(r);
-                                        setCurrentPage('knowledge');
-                                      }}
-                                    />
+                                    <ScriptureBadge key={i} reference={ref} />
                                   ))}
                                 </div>
                               )}
@@ -1709,8 +1260,7 @@ export default function App() {
           <>
             {/* Left Column: Input & List */}
             <div className="lg:col-span-4 space-y-12">
-              {user && (
-                <section className="bg-white p-6 rounded-3xl border border-[#141414]/5 shadow-sm">
+              <section className="bg-white p-6 rounded-3xl border border-[#141414]/5 shadow-sm">
                 <div className="flex gap-6 mb-6 border-b border-[#141414]/5">
                   <button 
                     onClick={() => setActiveTab('single')}
@@ -1729,12 +1279,6 @@ export default function App() {
                     className={`text-[10px] font-bold uppercase tracking-widest pb-3 border-b-2 transition-all ${activeTab === 'history' ? 'border-[#141414] text-[#141414]' : 'border-transparent text-[#141414]/40'}`}
                   >
                     {t.history}
-                  </button>
-                  <button 
-                    onClick={() => setCurrentPage('knowledge')}
-                    className="text-[10px] font-bold uppercase tracking-widest pb-3 border-b-2 border-transparent text-[#141414]/40 hover:text-[#141414] transition-all"
-                  >
-                    {t.knowledgeBase}
                   </button>
                 </div>
 
@@ -1760,46 +1304,15 @@ export default function App() {
                         </div>
                       )}
                     </div>
-
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/40 px-1">
-                        Manual Transcript (Optional)
-                      </label>
-                      <textarea
-                        placeholder="Paste YouTube transcript here... (Optional)"
-                        className="w-full px-4 py-3 bg-white border border-[#141414]/10 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#141414]/5 min-h-[120px] resize-y"
-                        value={transcriptInput}
-                        onChange={(e) => setTranscriptInput(e.target.value)}
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="forceIndex"
+                        checked={forceIndex}
+                        onChange={(e) => setForceIndex(e.target.checked)}
                         disabled={isProcessing}
                       />
-                      <p className="text-[10px] text-[#141414]/40 px-1">
-                        Tip: Open YouTube video &gt; ... &gt; Show transcript &gt; Copy all and paste here.
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap gap-4 items-center">
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          id="useAiFallback"
-                          checked={useAiFallback}
-                          onChange={(e) => setUseAiFallback(e.target.checked)}
-                          disabled={isProcessing}
-                        />
-                        <label htmlFor="useAiFallback" className="text-xs text-[#141414]/60">Use AI Transcription (Skip YouTube)</label>
-                      </div>
-                      <p className="text-[10px] text-[#141414]/40 px-1 -mt-1">
-                        Note: AI transcription is automatically used if auto-generated subtitles are detected.
-                      </p>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          id="forceIndex"
-                          checked={forceIndex}
-                          onChange={(e) => setForceIndex(e.target.checked)}
-                          disabled={isProcessing}
-                        />
-                        <label htmlFor="forceIndex" className="text-xs text-[#141414]/60">Force re-index</label>
-                      </div>
+                      <label htmlFor="forceIndex" className="text-xs text-[#141414]/60">Force re-index</label>
                     </div>
                     {error && (
                       <motion.div 
@@ -1925,54 +1438,6 @@ export default function App() {
                             )}
                           </button>
                         </div>
-
-                        {batchSummary && (
-                          <div className="mt-6 p-6 bg-[#141414]/[0.02] rounded-3xl border border-[#141414]/5 space-y-4">
-                            <div className="flex items-center justify-between">
-                              <h4 className="text-[10px] font-bold uppercase tracking-widest text-[#141414]">Batch Summary</h4>
-                              <button 
-                                onClick={() => setBatchSummary(null)}
-                                className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/40 hover:text-[#141414]"
-                              >
-                                Clear
-                              </button>
-                            </div>
-                            <div className="grid grid-cols-3 gap-4">
-                              <div className="p-3 bg-white rounded-xl border border-[#141414]/5 text-center">
-                                <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-500 mb-1">Success</p>
-                                <p className="text-xl font-serif italic">{batchSummary.success}</p>
-                              </div>
-                              <div className="p-3 bg-white rounded-xl border border-[#141414]/5 text-center">
-                                <p className="text-[10px] font-bold uppercase tracking-widest text-red-500 mb-1">Failed</p>
-                                <p className="text-xl font-serif italic">{batchSummary.fail}</p>
-                              </div>
-                              <div className="p-3 bg-white rounded-xl border border-[#141414]/5 text-center">
-                                <p className="text-[10px] font-bold uppercase tracking-widest text-amber-500 mb-1">Skipped</p>
-                                <p className="text-xl font-serif italic">{batchSummary.skipped}</p>
-                              </div>
-                            </div>
-
-                            {skippedVideos.length > 0 && (
-                              <div className="space-y-3">
-                                <p className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/40">Skipped (Already Indexed)</p>
-                                <div className="space-y-2 max-h-48 overflow-y-auto custom-scrollbar pr-2">
-                                  {skippedVideos.map((video) => (
-                                    <div key={video.url} className="flex items-center justify-between p-3 bg-white rounded-xl border border-[#141414]/5 group">
-                                      <span className="text-xs truncate flex-1 text-[#141414]/60">{video.title}</span>
-                                      <button
-                                        onClick={() => reindexVideo(video)}
-                                        disabled={isProcessing}
-                                        className="ml-3 px-3 py-1 bg-[#141414] text-white text-[10px] font-bold uppercase tracking-widest rounded-full hover:bg-[#141414]/90 transition-all disabled:opacity-50"
-                                      >
-                                        Re-index
-                                      </button>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        )}
                       </div>
                     )}
                   </div>
@@ -1984,13 +1449,10 @@ export default function App() {
                     deleteVideo={deleteVideo} 
                     setExportTarget={setExportTarget} 
                     setShowExportModal={setShowExportModal}
-                    rebuildIndex={rebuildIndex}
-                    isRebuildingIndex={isRebuildingIndex}
                     t={t}
                   />
                 )}
               </section>
-              )}
 
               {activeTab !== 'history' && (
                 <section>
@@ -2006,7 +1468,7 @@ export default function App() {
                         <div key={video.id} className="group relative">
                           <div className="flex items-center gap-2">
                             <button
-                              onClick={() => navigate(`/video/${video.id}`)}
+                              onClick={() => viewVideoSegments(video)}
                               className={`flex-1 text-left p-4 rounded-2xl border transition-all flex items-center gap-4 ${
                                 selectedVideo?.id === video.id 
                                   ? 'bg-white border-[#141414] shadow-md ring-1 ring-[#141414]/5' 
@@ -2018,14 +1480,8 @@ export default function App() {
                               </div>
                               <div className="flex-1 min-w-0">
                                 <p className="text-sm font-serif italic truncate leading-tight mb-1">{video.title}</p>
-                                <div className="text-[10px] text-blue-600 font-mono truncate mb-1 opacity-60 group-hover:opacity-100 transition-opacity">
-                                  {video.url}
-                                </div>
                                 <div className="flex items-center gap-3">
                                   <p className="text-[10px] font-bold uppercase tracking-tighter text-[#141414]/40">{video.speaker_name || 'Unknown'}</p>
-                                  {video.upload_date && (
-                                    <span className="text-[10px] font-bold uppercase tracking-tighter text-[#141414]/30">• {video.upload_date}</span>
-                                  )}
                                   <span className="text-[10px] font-mono text-[#141414]/20">{video.token_count || 0} tokens</span>
                                 </div>
                               </div>
@@ -2040,7 +1496,7 @@ export default function App() {
                                 <Download className="w-3.5 h-3.5" />
                               </button>
                               <button 
-                                onClick={() => setVideoToDelete(video.id)}
+                                onClick={() => deleteVideo(video.id)}
                                 className="p-2 rounded-lg bg-white border border-[#141414]/5 hover:bg-red-500 hover:text-white transition-all shadow-sm"
                                 title="Delete"
                               >
@@ -2059,31 +1515,7 @@ export default function App() {
             {/* Right Column: Results */}
             <div className="lg:col-span-8">
               <AnimatePresence mode="wait">
-                {activeTab === 'knowledge' ? (
-                  <motion.div
-                    key="knowledge-base"
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -20 }}
-                    className="h-[70vh] flex flex-col items-center justify-center text-center space-y-6 bg-white rounded-[2.5rem] border border-[#141414]/5 shadow-sm"
-                  >
-                    <div className="w-20 h-20 bg-[#141414]/[0.02] rounded-full flex items-center justify-center">
-                      <BookOpen className="w-8 h-8 text-[#141414]/10" />
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-serif italic text-[#141414]">{t.knowledgeBase}</h3>
-                      <p className="text-xs text-[#141414]/40 max-w-xs mx-auto mt-2">
-                        Explore the Quran and Tafseer in our dedicated full-screen explorer.
-                      </p>
-                    </div>
-                    <button 
-                      onClick={() => setCurrentPage('knowledge')}
-                      className="px-6 py-3 bg-[#141414] text-white rounded-xl text-xs font-bold uppercase tracking-widest hover:bg-[#141414]/90 transition-all shadow-lg shadow-[#141414]/10"
-                    >
-                      Open Explorer
-                    </button>
-                  </motion.div>
-                ) : searchResults.length > 0 ? (
+                {searchResults.length > 0 ? (
                   <motion.div
                     key="search-results"
                     initial={{ opacity: 0, y: 10 }}
@@ -2093,17 +1525,9 @@ export default function App() {
                   >
                     <div className="flex items-center justify-between">
                       <h2 className="text-2xl font-serif italic">{t.searchResults} "{searchQuery}"</h2>
-                      <div className="flex items-center gap-3">
-                        {isSearching && (
-                          <div className="flex items-center gap-2 text-xs text-[#141414]/40 font-medium">
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                            Searching...
-                          </div>
-                        )}
-                        <span className="text-xs font-medium bg-[#141414]/5 px-3 py-1 rounded-full">
-                          {searchResults.length} {t.searchResults}
-                        </span>
-                      </div>
+                      <span className="text-xs font-medium bg-[#141414]/5 px-3 py-1 rounded-full">
+                        {searchResults.length} {t.searchResults}
+                      </span>
                     </div>
                     <div className="grid gap-4">
                       {searchResults.map((result, idx) => (
@@ -2112,10 +1536,6 @@ export default function App() {
                           result={result} 
                           formatTime={formatTime} 
                           onViewDetails={handleViewDetails}
-                          onNavigateToKnowledge={(r) => {
-                            setKnowledgeBaseSelection(r);
-                            setCurrentPage('knowledge');
-                          }}
                         />
                       ))}
                     </div>
@@ -2142,52 +1562,8 @@ export default function App() {
         )}
       </main>
 
-      {/* Delete Confirmation Modal */}
-      <AnimatePresence>
-        {videoToDelete && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setVideoToDelete(null)}
-              className="absolute inset-0 bg-[#141414]/40 backdrop-blur-sm"
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative bg-white rounded-3xl shadow-2xl p-8 max-w-sm w-full border border-[#141414]/5"
-            >
-              <div className="bg-red-50 w-12 h-12 rounded-2xl flex items-center justify-center mb-6">
-                <Trash2 className="w-6 h-6 text-red-500" />
-              </div>
-              <h3 className="text-xl font-serif italic mb-2">Delete Video?</h3>
-              <p className="text-sm text-[#141414]/60 mb-8 leading-relaxed">
-                Are you sure you want to delete this video? This action cannot be undone and all associated analysis will be lost.
-              </p>
-              <div className="flex gap-3">
-                <button 
-                  onClick={() => setVideoToDelete(null)}
-                  className="flex-1 px-4 py-3 rounded-xl text-sm font-bold text-[#141414]/40 hover:text-[#141414] hover:bg-[#141414]/5 transition-all"
-                >
-                  Cancel
-                </button>
-                <button 
-                  onClick={() => deleteVideo(videoToDelete)}
-                  className="flex-1 px-4 py-3 rounded-xl text-sm font-bold bg-red-500 text-white hover:bg-red-600 transition-all shadow-lg shadow-red-500/20"
-                >
-                  Delete
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
       {/* Export Modal */}
-      <AnimatePresence>
-        {showExportModal && exportTarget && (
+      {showExportModal && exportTarget && (
         <div className="fixed inset-0 bg-[#141414]/40 backdrop-blur-sm flex items-center justify-center z-50 p-6">
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
@@ -2225,8 +1601,7 @@ export default function App() {
             </p>
           </motion.div>
         </div>
-        )}
-      </AnimatePresence>
+      )}
       </div>
     </ErrorBoundary>
   );
@@ -2252,200 +1627,97 @@ function DetailSection({ title, children, className = "" }: { title: string, chi
   );
 }
 
-function ScriptureBadge({ reference, onNavigateToKnowledge }: { reference: any, onNavigateToKnowledge?: (ref: any) => void }) {
-  const [fetchedText, setFetchedText] = useState<string | null>(null);
+function ScriptureBadge({ reference }: { reference: any }) {
   const refType = reference.reference_type?.toLowerCase() || '';
   const isQuran = refType === 'quran';
   const isBible = refType === 'bible';
-  const isHadith = refType === 'hadith';
   
-  useEffect(() => {
-    if (isQuran && reference.surah && reference.ayah && !reference.verse_text) {
-      quranService.getTranslation(reference.surah, reference.ayah).then(setFetchedText);
-    }
-  }, [isQuran, reference.surah, reference.ayah, reference.verse_text]);
-
   const badgeColor = isQuran 
     ? 'bg-emerald-50 text-emerald-700 border-emerald-100' 
     : isBible 
       ? 'bg-amber-50 text-amber-700 border-amber-100'
-      : isHadith
-        ? 'bg-blue-50 text-blue-700 border-blue-100'
-        : 'bg-gray-50 text-gray-700 border-gray-100';
+      : 'bg-gray-50 text-gray-700 border-gray-100';
   
   return (
     <div className={`inline-flex flex-col p-2 rounded-lg border ${badgeColor} text-xs space-y-1 w-full`}>
-      <div className="flex items-center justify-between font-bold">
-        <div className="flex items-center gap-1.5">
-          <BookOpen className="w-3 h-3" />
-          <span>{reference.reference}</span>
-        </div>
-        <div className="flex items-center gap-1">
-          {reference.reference_key && (
-            <span className="text-[9px] font-mono opacity-50 bg-black/5 px-1 rounded">{reference.reference_key}</span>
-          )}
-          {isQuran && onNavigateToKnowledge && (
-            <button 
-              onClick={() => onNavigateToKnowledge(reference)}
-              className="p-1 hover:bg-black/5 rounded transition-colors"
-              title="View in Knowledge Base"
-            >
-              <ExternalLink className="w-2.5 h-2.5" />
-            </button>
-          )}
-        </div>
-      </div>
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1.5 font-bold">
+        <BookOpen className="w-3 h-3" />
+        <span>{reference.reference}</span>
         {reference.match_type && (
           <span className="text-[10px] opacity-60 uppercase tracking-tighter">({reference.match_type.replace('_', ' ')})</span>
         )}
-        {reference.confidence_score && (
-          <span className="text-[9px] opacity-40 font-mono">Conf: {(reference.confidence_score * 100).toFixed(0)}%</span>
-        )}
       </div>
-      {(reference.verse_text || fetchedText) && (
-        <p className="text-[10px] opacity-80 leading-tight border-l-2 border-current/20 pl-2 my-1">
-          {reference.verse_text || fetchedText}
-        </p>
-      )}
       {reference.evidence_text && (
         <p className="italic opacity-80 line-clamp-2">"{reference.evidence_text}"</p>
       )}
       {reference.explanation && (
         <p className="text-[10px] opacity-60 leading-tight">{reference.explanation}</p>
       )}
-      {reference.topic_tags && reference.topic_tags.length > 0 && (
-        <div className="flex flex-wrap gap-1 pt-1">
-          {reference.topic_tags.map((tag: string, i: number) => (
-            <span key={i} className="text-[8px] uppercase tracking-widest bg-black/5 px-1 rounded-sm">{tag}</span>
-          ))}
+    </div>
+  );
+}
+
+function SearchResultCard({ result, formatTime, onViewDetails }: { result: SearchResult, formatTime: (s: number) => string, onViewDetails: (videoUrl: string) => void }) {
+  return (
+    <div className="bg-white p-6 rounded-2xl border border-[#141414]/5 shadow-sm hover:shadow-md transition-all group">
+      <div className="flex items-start justify-between mb-4">
+        <div>
+          <h3 className="text-lg font-medium group-hover:text-[#141414] transition-colors">{result.topic}</h3>
+          <p className="text-xs text-[#141414]/40 flex items-center gap-1 mt-1">
+            <Video className="w-3 h-3" />
+            <span>{result.video_title}</span>
+            {result.speaker_name && (
+              <>
+                <span className="mx-1">•</span>
+                <User className="w-3 h-3" />
+                <span>{result.speaker_name}</span>
+              </>
+            )}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={() => onViewDetails(result.video_url)}
+            className="p-2 rounded-full bg-[#141414]/5 text-[#141414]/40 hover:bg-[#141414] hover:text-white transition-all"
+            title="View Full Analysis"
+          >
+            <FileText className="w-4 h-4" />
+          </button>
+          <a
+            href={`${getCleanYoutubeUrl(result.video_url)}&t=${Math.floor(result.start_time)}s`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="bg-[#141414]/5 p-2 rounded-full hover:bg-[#141414] hover:text-white transition-all"
+            title="Watch on YouTube"
+          >
+            <Play className="w-4 h-4 fill-current" />
+          </a>
+        </div>
+      </div>
+      <p className="text-sm text-[#141414]/70 mb-4 leading-relaxed">
+        {result.summary}
+      </p>
+      <div className="flex items-center gap-4 text-xs font-mono text-[#141414]/40">
+        <div className="flex items-center gap-1">
+          <Clock className="w-3 h-3" />
+          <span>{formatTime(result.start_time)} - {formatTime(result.end_time)}</span>
+        </div>
+      </div>
+      {result.scripture_references && result.scripture_references.length > 0 && (
+        <div className="space-y-2 mt-4 pt-4 border-t border-[#141414]/5">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/30">Scripture References</p>
+          <div className="grid grid-cols-1 gap-2">
+            {result.scripture_references.map((ref, i) => (
+              <ScriptureBadge key={i} reference={ref} />
+            ))}
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-function SearchResultCard({ result, formatTime, onViewDetails, onNavigateToKnowledge }: { result: any, formatTime: (s: number) => string, onViewDetails: (videoUrl: string) => void, onNavigateToKnowledge: (ref: any) => void }) {
-  const isIndexEntry = 'type' in result;
-  const type = isIndexEntry ? result.type : 'video_segment';
-  const text = isIndexEntry ? result.text : result.summary;
-  const title = isIndexEntry ? result.video_title : result.video_title;
-  const timestamp = isIndexEntry ? result.timestamp : result.start_time;
-  const youtubeId = isIndexEntry ? result.youtube_id : result.youtube_id;
-  const topics = isIndexEntry ? result.topics : [];
-
-  return (
-    <motion.div 
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="bg-white p-6 rounded-3xl border border-[#141414]/5 hover:border-[#141414]/20 transition-all group shadow-sm hover:shadow-md"
-    >
-      <div className="flex flex-col md:flex-row gap-6">
-        <div className="w-full md:w-48 shrink-0">
-          <div className="relative aspect-video rounded-2xl overflow-hidden bg-[#141414]/5 group/thumb">
-            {youtubeId ? (
-              <img 
-                src={`https://img.youtube.com/vi/${youtubeId}/mqdefault.jpg`}
-                alt={title}
-                className="w-full h-full object-cover transition-transform duration-500 group-hover/thumb:scale-110"
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <div className="w-full h-full flex items-center justify-center text-[#141414]/20">
-                <BookOpen className="w-8 h-8" />
-              </div>
-            )}
-            {youtubeId && (
-              <button 
-                onClick={() => onViewDetails(`https://youtube.com/watch?v=${youtubeId}`)}
-                className="absolute inset-0 flex items-center justify-center bg-[#141414]/40 opacity-0 group-hover/thumb:opacity-100 transition-opacity"
-              >
-                <Play className="w-8 h-8 text-white fill-current" />
-              </button>
-            )}
-            <div className="absolute top-2 left-2">
-              <span className={`text-[8px] font-bold uppercase tracking-widest px-2 py-1 rounded-full backdrop-blur-md ${
-                type === 'scripture' ? 'bg-emerald-500/80 text-white' :
-                type === 'quran' ? 'bg-emerald-700/80 text-white' :
-                type === 'bible' ? 'bg-sky-700/80 text-white' :
-                type === 'knowledge' ? 'bg-purple-700/80 text-white' :
-                type === 'argument' ? 'bg-blue-500/80 text-white' :
-                type === 'summary' ? 'bg-amber-500/80 text-white' :
-                'bg-black/60 text-white'
-              }`}>
-                {type.replace('_', ' ')}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex-1 space-y-3">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h3 className="text-lg font-serif italic text-[#141414] group-hover:text-[#141414] transition-colors line-clamp-1">
-                {type === 'quran' ? `${result.surah_name_en} (${result.surah_number}:${result.ayah_number})` : 
-                 type === 'bible' ? `${result.book} ${result.chapter}:${result.verse}` : 
-                 title}
-              </h3>
-              <div className="flex items-center gap-2 mt-1">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-[#141414]/40">
-                  {result.speaker_name || result.speaker || 'Unknown Speaker'}
-                </span>
-                {timestamp > 0 && (
-                  <>
-                    <span className="text-[#141414]/10">•</span>
-                    <button 
-                      onClick={() => onViewDetails(`https://youtube.com/watch?v=${youtubeId}&t=${timestamp}`)}
-                      className="text-[10px] font-mono font-bold text-blue-600 hover:underline"
-                    >
-                      {formatTime(timestamp)}
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-            <button 
-              onClick={() => onViewDetails(`https://youtube.com/watch?v=${youtubeId}`)}
-              className="p-2 hover:bg-[#141414]/5 rounded-xl transition-colors shrink-0"
-            >
-              <ExternalLink className="w-4 h-4 text-[#141414]/40" />
-            </button>
-          </div>
-
-          <p className="text-sm text-[#141414]/60 leading-relaxed line-clamp-3 italic">
-            "{type === 'quran' ? result.text_en : 
-              type === 'bible' ? result.text : 
-              text}"
-          </p>
-
-          {topics && topics.length > 0 && (
-            <div className="flex flex-wrap gap-2 pt-1">
-              {topics.slice(0, 3).map((topic: string, i: number) => (
-                <span key={i} className="text-[9px] font-bold uppercase tracking-widest px-2 py-0.5 bg-[#141414]/5 text-[#141414]/40 rounded-full">
-                  {topic}
-                </span>
-              ))}
-            </div>
-          )}
-          
-          {result.scripture_references && result.scripture_references.length > 0 && (
-            <div className="flex flex-wrap gap-2 pt-1">
-              {result.scripture_references.slice(0, 2).map((ref: any, i: number) => (
-                <ScriptureBadge 
-                  key={i} 
-                  reference={ref} 
-                  onNavigateToKnowledge={onNavigateToKnowledge}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </motion.div>
-  );
-}
-
-function SegmentCard({ segment, formatTime, youtubeId, onNavigateToKnowledge }: { segment: Segment, formatTime: (s: number) => string, youtubeId: string, onNavigateToKnowledge: (ref: any) => void }) {
+function SegmentCard({ segment, formatTime, youtubeId }: { segment: Segment, formatTime: (s: number) => string, youtubeId: string }) {
   const videoUrl = `https://youtube.com/watch?v=${youtubeId}`;
   const cleanUrl = getCleanYoutubeUrl(videoUrl);
   
@@ -2481,11 +1753,7 @@ function SegmentCard({ segment, formatTime, youtubeId, onNavigateToKnowledge }: 
       {segment.scripture_references && segment.scripture_references.length > 0 && (
         <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-[#141414]/5">
           {segment.scripture_references.map((ref, i) => (
-            <ScriptureBadge 
-              key={i} 
-              reference={ref} 
-              onNavigateToKnowledge={onNavigateToKnowledge}
-            />
+            <ScriptureBadge key={i} reference={ref} />
           ))}
         </div>
       )}
