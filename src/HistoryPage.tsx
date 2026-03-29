@@ -1,7 +1,7 @@
 import React from 'react';
-import { Download, Trash2, FileJson, History as HistoryIcon } from 'lucide-react';
+import { Download, Trash2, FileJson, History as HistoryIcon, Database, Loader2 } from 'lucide-react';
 
-export default function HistoryPage({ videos, selectedHistoryVideos, toggleHistorySelection, deleteVideo, setExportTarget, setShowExportModal, t }: any) {
+export default function HistoryPage({ videos, selectedHistoryVideos, toggleHistorySelection, deleteVideo, setExportTarget, setShowExportModal, rebuildIndex, isRebuildingIndex, t }: any) {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-end pb-4 border-b border-[#141414]/10">
@@ -9,7 +9,27 @@ export default function HistoryPage({ videos, selectedHistoryVideos, toggleHisto
           <HistoryIcon className="w-4 h-4 text-[#141414]/40" />
           <h2 className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#141414]/40">{t.archive}</h2>
         </div>
-        <div className="flex gap-4">
+        <div className="flex gap-4 items-center">
+          <button 
+            onClick={rebuildIndex}
+            disabled={isRebuildingIndex || videos.length === 0}
+            className={`text-[10px] uppercase tracking-wider font-bold flex items-center gap-1.5 transition-colors ${
+              isRebuildingIndex ? 'text-amber-600' : 'text-[#141414]/60 hover:text-[#141414]'
+            }`}
+          >
+            {isRebuildingIndex ? (
+              <>
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Rebuilding Index...
+              </>
+            ) : (
+              <>
+                <Database className="w-3 h-3" />
+                Rebuild Search Index
+              </>
+            )}
+          </button>
+          <div className="w-px h-3 bg-[#141414]/10" />
           {selectedHistoryVideos.length > 0 && (
             <button 
               onClick={() => { 

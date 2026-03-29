@@ -64,9 +64,14 @@ async function startServer() {
 
       res.json({ transcript, title });
     } catch (error: any) {
-      console.error("Transcript error:", error);
+      const isTranscriptDisabled = error.message && error.message.includes("Transcript is disabled");
+      const isTooManyRequests = error.message && (error.message.includes("too many requests") || error.message.includes("captcha"));
+
+      if (error.message && !isTranscriptDisabled && !isTooManyRequests) {
+        console.error("Transcript error:", error);
+      }
       
-      // If transcript is disabled, we still want to try and get the title
+      // If transcript is disabled or blocked, we still want to try and get the title
       let title = "YouTube Video";
       try {
         const metaRes = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`);
@@ -76,7 +81,7 @@ async function startServer() {
         }
       } catch (e) {}
 
-      if (error.message && error.message.includes("Transcript is disabled")) {
+      if (isTranscriptDisabled) {
         // Return a special flag so the frontend knows to use the AI fallback
         return res.json({ 
           transcript: null, 
@@ -85,13 +90,27 @@ async function startServer() {
           message: "Transcripts are disabled for this video. Switching to AI-generated alternative transcription..." 
         });
       }
-      
-      let errorMessage = "Failed to fetch transcript. Make sure the video has captions enabled.";
-      if (error.message && error.message.includes("Could not find videoId")) {
-        errorMessage = "Invalid YouTube URL. Please check the link and try again.";
+
+      if (isTooManyRequests) {
+        return res.json({ 
+          transcript: null, 
+          title,
+          fallback: true,
+          message: "YouTube is temporarily limiting transcript access from this server. Switching to AI-generated alternative transcription..." 
+        });
       }
       
-      res.status(500).json({ error: errorMessage });
+      if (error.message && (error.message.includes("Could not find videoId") || error.message.includes("Invalid YouTube URL"))) {
+        return res.status(400).json({ error: "Invalid YouTube URL. Please check the link and try again." });
+      }
+      
+      // For any other error (like no captions or library failure), fallback to AI
+      return res.json({ 
+        transcript: null, 
+        title,
+        fallback: true,
+        message: "Official transcript unavailable. Switching to AI-generated alternative transcription..." 
+      });
     }
   });
 

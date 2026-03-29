@@ -2,110 +2,105 @@
   "entities": {
     "Video": {
       "title": "Video",
-      "description": "Metadata and analysis for an indexed YouTube video",
+      "description": "Normalized video metadata",
       "type": "object",
       "properties": {
-        "youtube_id": { "type": "string", "description": "YouTube Video ID" },
-        "title": { "type": "string", "description": "Video Title" },
-        "url": { "type": "string", "description": "Full YouTube URL" },
-        "executive_summary": { "type": "string", "description": "AI-generated executive summary" },
-        "linkable_timestamps": { 
-          "type": "array", 
-          "items": { 
-            "type": "object",
-            "properties": {
-              "time": { "type": "string" },
-              "description": { "type": "string" }
-            }
-          } 
-        },
-        "themes_and_topics": {
-          "type": "object",
-          "properties": {
-            "overarching_message": { "type": "string" },
-            "categories": { "type": "array", "items": { "type": "string" } }
-          }
-        },
-        "theological_topics": { "type": "array", "items": { "type": "string" } },
-        "key_points": { "type": "array", "items": { "type": "string" }, "description": "List of key points" },
-        "keywords": { "type": "array", "items": { "type": "string" }, "description": "SEO tags" },
-        "minute_by_minute": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "timestamp": { "type": "string" },
-              "content": { "type": "string" }
-            }
-          }
-        },
-        "transcript": { "type": "string" },
-        "scripture_references": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "reference_type": { "type": "string" },
-              "reference": { "type": "string" }
-            }
-          }
-        },
-        "entities": { "type": "array", "items": { "type": "string" } },
-        "arguments": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "type": { "type": "string" },
-              "claim": { "type": "string" },
-              "speaker": { "type": "string" },
-              "timestamp": { "type": "string" }
-            }
-          }
-        },
-        "debate_claims": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "claim": { "type": "string" },
-              "speaker": { "type": "string" },
-              "timestamp": { "type": "string" }
-            }
-          }
-        },
-        "speaker_name": { "type": "string" },
-        "channel_name": { "type": "string" },
-        "channel_url": { "type": "string" },
-        "video_timestamp": { "type": "string" },
-        "token_count": { "type": "number" },
-        "userId": { "type": "string", "description": "Owner's Firebase Auth UID" },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "title": { "type": "string" },
+        "channelId": { "type": "string" },
+        "speakerIds": { "type": "array", "items": { "type": "string" } },
+        "uploadDate": { "type": "string", "format": "date-time" },
+        "status": { "type": "string", "enum": ["draft", "published", "archived"] }
       },
-      "required": ["youtube_id", "title", "url", "userId", "createdAt"]
+      "required": ["title", "channelId", "status"]
     },
-    "Segment": {
-      "title": "Segment",
-      "description": "A specific topic segment within a video",
+    "Channel": {
+      "title": "Channel",
+      "description": "YouTube channel metadata",
       "type": "object",
       "properties": {
-        "videoId": { "type": "string", "description": "Reference to the Video document ID" },
-        "topic": { "type": "string" },
-        "start_time": { "type": "number" },
-        "end_time": { "type": "number" },
-        "summary": { "type": "string" }
+        "name": { "type": "string" },
+        "url": { "type": "string" }
       },
-      "required": ["videoId", "topic", "start_time", "end_time", "summary"]
+      "required": ["name"]
+    },
+    "Speaker": {
+      "title": "Speaker",
+      "description": "Speaker metadata",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" }
+      },
+      "required": ["name"]
+    },
+    "VideoChunk": {
+      "title": "VideoChunk",
+      "description": "Chunked transcript segments",
+      "type": "object",
+      "properties": {
+        "videoId": { "type": "string" },
+        "text": { "type": "string" },
+        "startTime": { "type": "number" },
+        "endTime": { "type": "number" }
+      },
+      "required": ["videoId", "text", "startTime", "endTime"]
+    },
+    "QuranVerse": {
+      "title": "QuranVerse",
+      "description": "Full Quran dataset",
+      "type": "object",
+      "properties": {
+        "surah": { "type": "number" },
+        "ayah": { "type": "number" },
+        "text_uthmani": { "type": "string" },
+        "text_simple_ar": { "type": "string" },
+        "keywords": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["surah", "ayah", "text_uthmani"]
+    },
+    "Hadith": {
+      "title": "Hadith",
+      "description": "Canonical hadith corpus",
+      "type": "object",
+      "properties": {
+        "text_ar": { "type": "string" },
+        "text_en": { "type": "string" },
+        "narrator_en": { "type": "string" },
+        "collection": { "type": "string" }
+      },
+      "required": ["text_ar", "text_en", "collection"]
+    },
+    "Topic": {
+      "title": "Topic",
+      "description": "Hierarchical topic taxonomy",
+      "type": "object",
+      "properties": {
+        "name_en": { "type": "string" },
+        "name_ar": { "type": "string" },
+        "parentId": { "type": "string" },
+        "level": { "type": "number" }
+      },
+      "required": ["name_en", "name_ar"]
+    },
+    "QuranReferenceDetection": {
+      "title": "QuranReferenceDetection",
+      "description": "AI-detected Quran citations",
+      "type": "object",
+      "properties": {
+        "videoId": { "type": "string" },
+        "verseId": { "type": "string" },
+        "confidenceScore": { "type": "number" }
+      },
+      "required": ["videoId", "verseId", "confidenceScore"]
     }
   },
   "firestore": {
-    "/videos/{videoId}": {
-      "schema": "Video",
-      "description": "Collection of indexed videos"
-    },
-    "/videos/{videoId}/segments/{segmentId}": {
-      "schema": "Segment",
-      "description": "Sub-collection of segments for a specific video"
-    }
+    "/videos/{videoId}": { "schema": "Video", "description": "Normalized video metadata" },
+    "/channels/{channelId}": { "schema": "Channel", "description": "YouTube channel metadata" },
+    "/speakers/{speakerId}": { "schema": "Speaker", "description": "Speaker metadata" },
+    "/video_chunks/{chunkId}": { "schema": "VideoChunk", "description": "Chunked transcript segments" },
+    "/quran_verses/{verseId}": { "schema": "QuranVerse", "description": "Full Quran dataset" },
+    "/hadith_texts/{hadithId}": { "schema": "Hadith", "description": "Canonical hadith corpus" },
+    "/topics/{topicId}": { "schema": "Topic", "description": "Hierarchical topic taxonomy" },
+    "/quran_reference_detections/{detectionId}": { "schema": "QuranReferenceDetection", "description": "AI-detected Quran citations" }
   }
 }

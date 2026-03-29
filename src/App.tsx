@@ -1400,7 +1400,7 @@ export default function App() {
                         
                         <div className="max-h-64 overflow-y-auto border border-[#141414]/10 rounded-xl bg-[#141414]/[0.02] p-2 space-y-1 custom-scrollbar">
                           {channelVideos.map((video) => (
-                            <label key={video.url} className="flex items-center gap-3 p-2.5 hover:bg-white hover:shadow-sm rounded-lg cursor-pointer transition-all border border-transparent hover:border-[#141414]/5 group">
+                            <label key={video.id || video.url} className="flex items-center gap-3 p-2.5 hover:bg-white hover:shadow-sm rounded-lg cursor-pointer transition-all border border-transparent hover:border-[#141414]/5 group">
                               <input 
                                 type="checkbox" 
                                 checked={selectedChannelVideos.includes(video.url)}
